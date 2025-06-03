@@ -48,6 +48,10 @@ jobs:
           CASE_SENSITIVE="${{ inputs.case-sensitive }}"
           
           echo "Using organization-wide JIRA project keys: $JIRA_PROJECT_KEYS"
+          echo "Using regex pattern: $REGEX_PATTERN"
+          echo "Fail if no JIRA ID: $FAIL_IF_NO_JIRA_ID"
+          echo "Allow WIP PRs: $ALLOW_WIP"
+          echo "Case sensitive: $CASE_SENSITIVE"
           
           # Handle WIP PRs
           if [[ "$ALLOW_WIP" == "true" && "${PR_TITLE,,}" =~ ^wip: ]]; then
@@ -55,55 +59,36 @@ jobs:
             exit 0
           fi
           
-          # Set up case sensitivity flag for grep
-          GREP_CASE_FLAG=""
-          if [[ "$CASE_SENSITIVE" != "true" ]]; then
-            GREP_CASE_FLAG="-i"
-          fi
-          
-          # Extract potential JIRA IDs using the provided regex pattern
-          POTENTIAL_IDS=$(echo "$PR_TITLE" | grep -o -E "$REGEX_PATTERN")
-          
-          if [[ -z "$POTENTIAL_IDS" ]]; then
-            echo "No JIRA ID found in PR title."
-            if [[ "$FAIL_IF_NO_JIRA_ID" == "true" ]]; then
-              echo "::error::No JIRA ID found in PR title: \"$PR_TITLE\""
-              exit 1
-            else
-              echo "::warning::No JIRA ID found in PR title: \"$PR_TITLE\""
-              exit 0
-            fi
-          fi
-          
           # Convert comma-separated project keys to array
           IFS=',' read -ra PROJECT_KEYS <<< "$JIRA_PROJECT_KEYS"
+          echo "Valid project keys: ${PROJECT_KEYS[*]}"
           
-          # Check if any of the potential IDs match a valid project key
+          # Directly check for valid JIRA IDs in the PR title
           VALID_ID_FOUND=false
           
-          for ID in $POTENTIAL_IDS; do
-            # Extract project key from ID (part before the dash)
-            PROJECT_KEY=${ID%%-*}
-            
-            for VALID_KEY in "${PROJECT_KEYS[@]}"; do
-              # Compare based on case sensitivity setting
-              if [[ "$CASE_SENSITIVE" == "true" ]]; then
-                if [[ "$PROJECT_KEY" == "$VALID_KEY" ]]; then
-                  echo "Found valid JIRA ID: $ID"
-                  VALID_ID_FOUND=true
-                  break 2
-                fi
-              else
-                if [[ "${PROJECT_KEY,,}" == "${VALID_KEY,,}" ]]; then
-                  echo "Found valid JIRA ID: $ID"
-                  VALID_ID_FOUND=true
-                  break 2
-                fi
+          for VALID_KEY in "${PROJECT_KEYS[@]}"; do
+            # Create a pattern specifically for this project key
+            if [[ "$CASE_SENSITIVE" == "true" ]]; then
+              PATTERN="$VALID_KEY-[0-9]+"
+              if echo "$PR_TITLE" | grep -q -E "$PATTERN"; then
+                FOUND_ID=$(echo "$PR_TITLE" | grep -o -E "$PATTERN" | head -1)
+                echo "Found valid JIRA ID: $FOUND_ID"
+                VALID_ID_FOUND=true
+                break
               fi
-            done
+            else
+              PATTERN="$VALID_KEY-[0-9]+"
+              if echo "$PR_TITLE" | grep -q -i -E "$PATTERN"; then
+                FOUND_ID=$(echo "$PR_TITLE" | grep -o -i -E "$PATTERN" | head -1)
+                echo "Found valid JIRA ID: $FOUND_ID"
+                VALID_ID_FOUND=true
+                break
+              fi
+            fi
           done
           
           if [[ "$VALID_ID_FOUND" != "true" ]]; then
+            echo "ERROR: No valid JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
             echo "::error::No valid JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
             exit 1
           fi
