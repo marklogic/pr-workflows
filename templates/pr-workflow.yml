@@ -1,4 +1,4 @@
-name: Check JIRA ID in PR Title
+name: 🏷️ JIRA ID Validator
 
 on:
   pull_request:
@@ -7,6 +7,6 @@ on:
 
 jobs:
   jira-pr-check:
-    name: Validate JIRA ID in PR Title
+    name: 🏷️ Validate JIRA ticket ID
     # Use the reusable workflow from the central repository
     uses: marklogic/pr-workflows/.github/workflows/jira-id-check.yml@main
