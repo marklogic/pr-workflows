@@ -1,4 +1,4 @@
-name: JIRA ID PR Title Checker
+name: 🏷️ JIRA ID Validator
 
 # Define all valid JIRA project keys for the entire organization here
 env:
@@ -32,7 +32,7 @@ jobs:
   check-jira-id:
     runs-on: ubuntu-latest
     steps:
-      - name: Check for JIRA ID in PR title
+      - name: 🏷️ Validate JIRA ticket ID in PR title
         shell: bash
         run: |
           # Get PR title from context
