@@ -7,6 +7,10 @@ env:
 on:
   workflow_call:
     inputs:
+      pr-title:
+        required: false
+        type: string
+        description: 'The PR title to check (for pull_request_target support)'
       regex-pattern:
         required: false
         type: string
@@ -35,8 +39,14 @@ jobs:
       - name: 🏷️ Validate JIRA ticket ID in PR title
         shell: bash
         run: |
-          # Get PR title from context
-          PR_TITLE="${{ github.event.pull_request.title }}"
+          # Get PR title from context or input parameter (for pull_request_target support)
+          if [[ -n "${{ inputs.pr-title }}" ]]; then
+            PR_TITLE="${{ inputs.pr-title }}"
+            echo "Using PR title from input parameter"
+          else
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            echo "Using PR title from GitHub event context"
+          fi
           echo "PR Title: $PR_TITLE"
           
           # Set up inputs as environment variables
