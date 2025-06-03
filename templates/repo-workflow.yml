@@ -1,0 +1,12 @@
+name: Check JIRA ID in PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    # No branch filtering - will run on all PRs
+
+jobs:
+  jira-pr-check:
+    name: Validate JIRA ID in PR Title
+    # Use the reusable workflow from the central repository
+    uses: your-org/pr-workflows/.github/workflows/jira-id-check.yml@main
