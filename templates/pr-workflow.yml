@@ -9,4 +9,4 @@ jobs:
   jira-pr-check:
     name: Validate JIRA ID in PR Title
     # Use the reusable workflow from the central repository
-    uses: your-org/pr-workflows/.github/workflows/jira-id-check.yml@main
+    uses: marklogic/pr-workflows/.github/workflows/jira-id-check.yml@main
