@@ -2,7 +2,7 @@ name: 🏷️ JIRA ID Validator
 
 # Define all valid JIRA project keys for the entire organization here
 env:
-  ORGANIZATION_JIRA_PROJECT_KEYS: "MLE,PDP"
+  ORGANIZATION_JIRA_PROJECT_KEYS: "MLE,PDP,COR"
 
 on:
   workflow_call:
@@ -82,7 +82,7 @@ jobs:
               PATTERN="$VALID_KEY-[0-9]+"
               if echo "$PR_TITLE" | grep -q -E "$PATTERN"; then
                 FOUND_ID=$(echo "$PR_TITLE" | grep -o -E "$PATTERN" | head -1)
-                echo "Found valid JIRA ID: $FOUND_ID"
+                echo "Found JIRA ID: $FOUND_ID"
                 VALID_ID_FOUND=true
                 break
               fi
@@ -90,7 +90,7 @@ jobs:
               PATTERN="$VALID_KEY-[0-9]+"
               if echo "$PR_TITLE" | grep -q -i -E "$PATTERN"; then
                 FOUND_ID=$(echo "$PR_TITLE" | grep -o -i -E "$PATTERN" | head -1)
-                echo "Found valid JIRA ID: $FOUND_ID"
+                echo "Found JIRA ID: $FOUND_ID"
                 VALID_ID_FOUND=true
                 break
               fi
@@ -98,7 +98,7 @@ jobs:
           done
           
           if [[ "$VALID_ID_FOUND" != "true" ]]; then
-            echo "ERROR: No valid JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
-            echo "::error::No valid JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
+            echo "ERROR: No JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
+            echo "::error::No JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
             exit 1
           fi
