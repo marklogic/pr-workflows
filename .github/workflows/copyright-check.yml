@@ -81,16 +81,6 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install Python dependencies
-      run: |
-        # Install any Python dependencies for the copyright script
-        if [ -f "pr-workflows/requirements.txt" ] && [ -s "pr-workflows/requirements.txt" ]; then
-          echo "Installing Python dependencies..."
-          pip install -r pr-workflows/requirements.txt
-        else
-          echo "No Python dependencies to install (requirements.txt is empty or missing)"
-        fi
-    
     - name: Get changed files
       id: changed-files
       run: |
@@ -156,6 +146,20 @@ jobs:
       if: steps.changed-files.outputs.skip-validation != 'true'
       run: |
         echo "Starting copyright validation..."
+        
+        # Debug: List current directory contents
+        echo "Current directory contents:"
+        ls -la
+        
+        # Debug: Check pr-workflows directory structure
+        echo "pr-workflows directory contents:"
+        ls -la pr-workflows/
+        if [ -d "pr-workflows/scripts" ]; then
+          echo "pr-workflows/scripts directory contents:"
+          ls -la pr-workflows/scripts/
+        else
+          echo "❌ pr-workflows/scripts directory does not exist"
+        fi
         
         script_path="pr-workflows/scripts/copyrightcheck.py"
         config_file="${{ steps.setup-config.outputs.config-file }}"
