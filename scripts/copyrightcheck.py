@@ -89,6 +89,11 @@ class CopyrightValidator:
                 base_file_path = file_path[len(prefix):]
                 break
         
+        # Always exclude dotfiles (files starting with .)
+        filename = os.path.basename(base_file_path)
+        if filename.startswith('.'):
+            return True
+        
         for excluded_pattern in self.excluded_files:
             excluded_pattern = os.path.normpath(excluded_pattern)
             
