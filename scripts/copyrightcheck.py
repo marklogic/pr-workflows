@@ -81,21 +81,30 @@ class CopyrightValidator:
         """Check if file should be excluded from copyright validation."""
         file_path = os.path.normpath(file_path)
         
+        # Strip common prefixes that might be added by the workflow
+        # This handles cases where files are passed as "target-repo/filename"
+        base_file_path = file_path
+        for prefix in ['target-repo/', 'target-repo\\']:
+            if file_path.startswith(prefix):
+                base_file_path = file_path[len(prefix):]
+                break
+        
         for excluded_pattern in self.excluded_files:
             excluded_pattern = os.path.normpath(excluded_pattern)
             
-            # Check for exact match
-            if file_path == excluded_pattern:
+            # Check for exact match against both full path and base path
+            if file_path == excluded_pattern or base_file_path == excluded_pattern:
                 return True
             
             # Check for pattern match (simple glob-like matching)
             if '*' in excluded_pattern:
                 pattern = excluded_pattern.replace('*', '.*')
-                if re.match(pattern, file_path):
+                if re.match(pattern, file_path) or re.match(pattern, base_file_path):
                     return True
             
             # Check if file is within excluded directory
-            if file_path.startswith(excluded_pattern + os.sep):
+            if (file_path.startswith(excluded_pattern + os.sep) or 
+                base_file_path.startswith(excluded_pattern + os.sep)):
                 return True
                 
         return False
