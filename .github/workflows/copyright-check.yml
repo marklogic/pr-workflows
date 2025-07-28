@@ -1,0 +1,198 @@
+name: Copyright Validation
+
+on:
+  workflow_call:
+
+jobs:
+  copyright-check:
+    name: Validate Copyright Headers
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout PR head (target repository code)
+      uses: actions/checkout@v4
+      with:
+        # Checkout the PR head - this gets the target repo code with changes
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: target-repo
+    
+    - name: Checkout pr-workflows repository (for validation script)
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/pr-workflows
+        ref: main
+        path: pr-workflows
+    
+    - name: Setup copyright configuration
+      id: setup-config
+      run: |
+        echo "Setting up copyright configuration..."
+        
+        config_file="target-repo/.copyrightconfig"
+        config_source="PR head"
+        
+        # Check if config file exists in PR head
+        if [ ! -f "$config_file" ]; then
+          echo "⚠️ Config file not found in PR head, checking base repository..."
+          
+          # Checkout base repository to get config file
+          # Use GITHUB_TOKEN for authentication (works for both public and private repos)
+          git clone --depth 1 --branch ${{ github.event.pull_request.base.ref }} \
+            https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git base-repo
+          
+          base_config_file="base-repo/.copyrightconfig"
+          
+          if [ -f "$base_config_file" ]; then
+            echo "✅ Found config file in base repository"
+            config_file="$base_config_file"
+            config_source="base repository"
+          else
+            echo "❌ Error: .copyrightconfig not found in PR head or base repository"
+            echo "Please ensure copyright configuration file exists in the repository"
+            exit 1
+          fi
+        else
+          echo "✅ Found config file in PR head"
+        fi
+        
+        # Validate config file content
+        if [ ! -s "$config_file" ]; then
+          echo "❌ Error: .copyrightconfig is empty"
+          exit 1
+        fi
+        
+        # Check for required startyear
+        if ! grep -q "^startyear:" "$config_file"; then
+          echo "❌ Error: startyear not found in .copyrightconfig"
+          exit 1
+        fi
+        
+        echo "✅ Using copyright configuration from $config_source"
+        echo "Configuration content:"
+        echo "========================"
+        cat "$config_file"
+        echo "========================"
+        
+        # Export config file path for later steps
+        echo "config-file=$config_file" >> $GITHUB_OUTPUT
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Get changed files
+      id: changed-files
+      run: |
+        echo "Getting list of changed files..."
+        
+        cd target-repo
+        
+        # Get the base and head refs for comparison
+        base_ref="${{ github.event.pull_request.base.ref || 'main' }}"
+        base_sha="${{ github.event.pull_request.base.sha }}"
+        head_sha="${{ github.event.pull_request.head.sha }}"
+        
+        echo "Getting changes introduced by the PR..."
+        echo "Base ref: $base_ref"
+        echo "Base SHA: $base_sha"
+        echo "Head SHA: $head_sha"
+        
+        # Fetch the base branch to compare against
+        git fetch origin "$base_ref"
+        
+        # Get files changed between base and PR head
+        changed_files=$(git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha")
+        
+        if [ -z "$changed_files" ]; then
+          echo "No files changed in this PR"
+          echo "files-count=0" >> $GITHUB_OUTPUT
+          echo "skip-validation=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        echo "Files changed by PR:"
+        echo "$changed_files"
+        
+        # Filter existing files and create list for validation
+        existing_count=0
+        
+        echo "$changed_files" | while IFS= read -r file; do
+          if [ -f "$file" ]; then
+            echo "✓ Will validate: $file"
+            existing_count=$((existing_count + 1))
+          else
+            echo "⚠ Skipping (deleted): $file"
+          fi
+        done
+        
+        # Count existing files
+        existing_count=$(echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' | wc -l)
+        
+        if [ "$existing_count" -eq 0 ]; then
+          echo "No existing files to validate (all files were deleted)"
+          echo "files-count=0" >> $GITHUB_OUTPUT
+          echo "skip-validation=true" >> $GITHUB_OUTPUT
+        else
+          echo "Files to validate: $existing_count"
+          # Save file list for next step (with target-repo/ prefix for validation)
+          echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "target-repo/{}"' > ../files_to_check.txt
+          echo "files-count=$existing_count" >> $GITHUB_OUTPUT
+          echo "skip-validation=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Validate copyright headers
+      id: validate
+      if: steps.changed-files.outputs.skip-validation != 'true'
+      run: |
+        echo "Starting copyright validation..."
+        
+        script_path="pr-workflows/scripts/copyrightcheck.py"
+        config_file="${{ steps.setup-config.outputs.config-file }}"
+        
+        # Verify copyright script exists in pr-workflows repo
+        if [ ! -f "$script_path" ]; then
+          echo "❌ Error: $script_path not found in pr-workflows repository"
+          echo "Please ensure the copyright check script exists in the pr-workflows repository"
+          exit 1
+        fi
+        
+        # Make script executable
+        chmod +x "$script_path"
+        
+        # Read files to check
+        if [ ! -f "files_to_check.txt" ]; then
+          echo "❌ Error: No files to check"
+          exit 1
+        fi
+        
+        files_to_check=$(cat files_to_check.txt | tr '\n' ' ')
+        echo "Validating files: $files_to_check"
+        
+        # Run copyright validation with verbose output
+        echo "Running copyright validation..."
+        if python3 "$script_path" -c "$config_file" -v $files_to_check; then
+          echo "✅ Copyright validation passed"
+          echo "status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Copyright validation failed"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+    
+    - name: Summary
+      if: always()
+      run: |
+        files_count="${{ steps.changed-files.outputs.files-count }}"
+        
+        if [ "${{ steps.changed-files.outputs.skip-validation }}" = "true" ]; then
+          echo "ℹ️ No files to validate - skipped copyright check"
+          echo "::notice title=Copyright Check::No files changed or all files excluded"
+        elif [ "${{ steps.validate.outputs.status }}" = "success" ]; then
+          echo "✅ Copyright validation completed successfully"
+          echo "::notice title=Copyright Check Passed::All $files_count changed files have valid copyright headers"
+        else
+          echo "❌ Copyright validation failed"
+          echo "::error title=Copyright Check Failed::Some of the $files_count changed files have invalid or missing copyright headers. Check the logs above for details."
+          exit 1
+        fi
