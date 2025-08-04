@@ -55,10 +55,22 @@ except Exception as e:
 
 class CopyrightValidator:
     def __init__(self, github_client, repo_full_name, pr_number):
-        self.github = github_client
-        self.repo = self.github.get_repo(repo_full_name)
-        self.pr = self.repo.get_pull(pr_number)
-        self.temp_dir = None
+        try:
+            logger.info(f"Initializing CopyrightValidator for {repo_full_name}#{pr_number}")
+            self.github = github_client
+            
+            logger.info(f"Getting repository: {repo_full_name}")
+            self.repo = self.github.get_repo(repo_full_name)
+            
+            logger.info(f"Getting pull request #{pr_number}")
+            self.pr = self.repo.get_pull(pr_number)
+            
+            self.temp_dir = None
+            logger.info("CopyrightValidator initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize CopyrightValidator: {e}")
+            raise
         
     def __enter__(self):
         """Context manager entry - create temp directory"""
@@ -76,8 +88,13 @@ class CopyrightValidator:
         config_source = None
         
         try:
+            logger.info("Attempting to get config from PR head...")
             # Try to get config from PR head first
-            head_repo = self.github.get_repo(self.pr.head.repo.full_name)
+            head_repo_name = self.pr.head.repo.full_name
+            logger.info(f"Getting repository: {head_repo_name}")
+            head_repo = self.github.get_repo(head_repo_name)
+            
+            logger.info(f"Getting .copyrightconfig from {head_repo_name} at {self.pr.head.sha}")
             config_file = head_repo.get_contents('.copyrightconfig', ref=self.pr.head.sha)
             config_content = config_file.decoded_content.decode('utf-8')
             config_source = "PR head"
@@ -86,7 +103,10 @@ class CopyrightValidator:
             logger.info(f"Config not found in PR head: {e}")
             
             try:
+                logger.info("Attempting to get config from base repository...")
                 # Fallback to base repo
+                base_repo_name = self.repo.full_name
+                logger.info(f"Getting .copyrightconfig from {base_repo_name} at {self.pr.base.ref}")
                 config_file = self.repo.get_contents('.copyrightconfig', ref=self.pr.base.ref)
                 config_content = config_file.decoded_content.decode('utf-8')
                 config_source = "base repository"
@@ -263,14 +283,20 @@ def get_installation_client(installation_id):
 
 def create_status_check(github_client, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit"""
-    repo = github_client.get_repo(repo_full_name)
-    repo.create_status(
-        sha=commit_sha,
-        state=state,  # pending, success, error, failure
-        target_url=details_url,
-        description=description,
-        context="copyright-validation"
-    )
+    try:
+        logger.info(f"Creating status check for {repo_full_name}@{commit_sha}: {state} - {description}")
+        repo = github_client.get_repo(repo_full_name)
+        repo.create_status(
+            sha=commit_sha,
+            state=state,  # pending, success, error, failure
+            target_url=details_url,
+            description=description,
+            context="copyright-validation"
+        )
+        logger.info("Status check created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create status check: {e}")
+        raise
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -314,17 +340,36 @@ def webhook():
             return jsonify({'error': 'Authentication failed'}), 500
         
         # Create pending status
-        create_status_check(
-            github_client,
-            repo_full_name,
-            commit_sha,
-            'pending',
-            'Copyright validation in progress...'
-        )
+        try:
+            create_status_check(
+                github_client,
+                repo_full_name,
+                commit_sha,
+                'pending',
+                'Copyright validation in progress...'
+            )
+        except Exception as e:
+            logger.error(f"Failed to create pending status: {e}")
+            return jsonify({'error': 'Failed to create status check'}), 500
         
         # Run copyright validation
-        with CopyrightValidator(github_client, repo_full_name, pr_number) as validator:
-            result = validator.validate_copyright()
+        try:
+            with CopyrightValidator(github_client, repo_full_name, pr_number) as validator:
+                result = validator.validate_copyright()
+        except Exception as e:
+            logger.error(f"Copyright validation failed: {e}")
+            # Try to create failure status
+            try:
+                create_status_check(
+                    github_client,
+                    repo_full_name,
+                    commit_sha,
+                    'error',
+                    f'Copyright validation error: {str(e)}'
+                )
+            except:
+                pass  # Don't fail if we can't create status
+            return jsonify({'error': f'Validation failed: {str(e)}'}), 500
         
         # Create status check based on results
         if result['success']:
