@@ -74,20 +74,41 @@ class CopyrightValidator:
                 logger.error(f"Config not found in base repo either: {e}")
                 return None, None
         
+        if config_content is None:
+            logger.error("Config content is None after processing")
+            return None, None
+            
         # Save config to temp file
         config_path = os.path.join(self.temp_dir, '.copyrightconfig')
-        with open(config_path, 'w') as f:
-            f.write(config_content)
+        try:
+            with open(config_path, 'w') as f:
+                f.write(config_content)
+        except Exception as e:
+            logger.error(f"Failed to write config file: {e}")
+            return None, None
             
         return config_path, config_source
     
     def get_changed_files(self):
         """Get list of changed files in the PR"""
-        files = []
-        for file in self.pr.get_files():
-            if file.status in ['added', 'modified']:  # Skip deleted files
-                files.append(file.filename)
-        return files
+        try:
+            files = []
+            pr_files = self.pr.get_files()
+            
+            if pr_files is None:
+                logger.warning("PR get_files() returned None")
+                return []
+                
+            for file in pr_files:
+                if file and file.status in ['added', 'modified']:  # Skip deleted files
+                    files.append(file.filename)
+            
+            logger.info(f"Found {len(files)} changed files: {files}")
+            return files
+            
+        except Exception as e:
+            logger.error(f"Error getting changed files: {e}")
+            return []
     
     def download_file_content(self, file_path):
         """Download file content from PR head"""
@@ -119,67 +140,89 @@ class CopyrightValidator:
     
     def validate_copyright(self):
         """Run copyright validation and return results"""
-        # Get configuration
-        config_path, config_source = self.get_config_file()
-        if not config_path:
-            return {
-                'success': False,
-                'error': 'No .copyrightconfig file found in PR head or base repository'
-            }
-        
-        # Get copyright script
-        script_path = self.get_copyright_script()
-        if not script_path:
-            return {
-                'success': False,
-                'error': 'Copyright validation script not available'
-            }
-        
-        # Get changed files
-        changed_files = self.get_changed_files()
-        if not changed_files:
-            return {
-                'success': True,
-                'message': 'No files to validate',
-                'files_checked': 0
-            }
-        
-        # Download changed files
-        downloaded_files = []
-        for file_path in changed_files:
-            local_path = self.download_file_content(file_path)
-            if local_path:
-                downloaded_files.append(local_path)
-        
-        if not downloaded_files:
-            return {
-                'success': False,
-                'error': 'No files could be downloaded for validation'
-            }
-        
-        # Run copyright validation
         try:
-            cmd = ['python3', script_path, '-c', config_path, '-v'] + downloaded_files
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=self.temp_dir
-            )
+            # Get configuration
+            logger.info("Getting configuration file...")
+            config_path, config_source = self.get_config_file()
+            if not config_path:
+                return {
+                    'success': False,
+                    'error': 'No .copyrightconfig file found in PR head or base repository'
+                }
             
-            return {
-                'success': result.returncode == 0,
-                'exit_code': result.returncode,
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'files_checked': len(downloaded_files),
-                'config_source': config_source
-            }
+            # Get copyright script
+            logger.info("Getting copyright script...")
+            script_path = self.get_copyright_script()
+            if not script_path:
+                return {
+                    'success': False,
+                    'error': 'Copyright validation script not available'
+                }
             
+            # Get changed files
+            logger.info("Getting changed files...")
+            changed_files = self.get_changed_files()
+            if not changed_files:
+                return {
+                    'success': True,
+                    'message': 'No files to validate',
+                    'files_checked': 0
+                }
+            
+            # Download changed files
+            logger.info(f"Downloading {len(changed_files)} files...")
+            downloaded_files = []
+            for file_path in changed_files:
+                logger.info(f"Downloading file: {file_path}")
+                local_path = self.download_file_content(file_path)
+                if local_path:
+                    downloaded_files.append(local_path)
+            
+            if not downloaded_files:
+                return {
+                    'success': False,
+                    'error': 'No files could be downloaded for validation'
+                }
+            
+            # Run copyright validation
+            logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
+            try:
+                cmd = ['python3', script_path, '-c', config_path, '-v'] + downloaded_files
+                logger.info(f"Running command: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=self.temp_dir
+                )
+                
+                logger.info(f"Command exit code: {result.returncode}")
+                if result.stdout:
+                    logger.info(f"Command stdout: {result.stdout}")
+                if result.stderr:
+                    logger.error(f"Command stderr: {result.stderr}")
+                
+                return {
+                    'success': result.returncode == 0,
+                    'exit_code': result.returncode,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr,
+                    'files_checked': len(downloaded_files),
+                    'config_source': config_source
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to run copyright validation subprocess: {str(e)}")
+                return {
+                    'success': False,
+                    'error': f'Failed to run copyright validation: {str(e)}'
+                }
+                
         except Exception as e:
+            logger.error(f"Exception in validate_copyright: {str(e)}", exc_info=True)
             return {
                 'success': False,
-                'error': f'Failed to run copyright validation: {str(e)}'
+                'error': f'Validation error: {str(e)}'
             }
 
 def get_installation_client(installation_id):
@@ -203,27 +246,41 @@ def webhook():
     """Handle GitHub webhook events"""
     try:
         payload = request.get_json()
+        if payload is None:
+            logger.error("Received webhook with no JSON payload")
+            return jsonify({'error': 'No JSON payload'}), 400
+            
         event_type = request.headers.get('X-GitHub-Event')
+        logger.info(f"Received webhook event: {event_type}")
         
         # Only handle pull request events
         if event_type != 'pull_request':
             return jsonify({'message': 'Event type not handled'}), 200
         
         action = payload.get('action')
+        logger.info(f"PR action: {action}")
         if action not in ['opened', 'synchronize', 'reopened']:
             return jsonify({'message': 'PR action not handled'}), 200
         
-        # Extract PR information
-        pr_data = payload['pull_request']
-        repo_full_name = payload['repository']['full_name']
-        installation_id = payload['installation']['id']
-        pr_number = pr_data['number']
-        commit_sha = pr_data['head']['sha']
+        # Extract PR information with error checking
+        try:
+            pr_data = payload['pull_request']
+            repo_full_name = payload['repository']['full_name']
+            installation_id = payload['installation']['id']
+            pr_number = pr_data['number']
+            commit_sha = pr_data['head']['sha']
+        except KeyError as e:
+            logger.error(f"Missing required field in webhook payload: {e}")
+            return jsonify({'error': f'Missing field: {e}'}), 400
         
         logger.info(f"Processing PR #{pr_number} in {repo_full_name}")
         
         # Get GitHub client for this installation
-        github_client = get_installation_client(installation_id)
+        try:
+            github_client = get_installation_client(installation_id)
+        except Exception as e:
+            logger.error(f"Failed to get GitHub client: {e}")
+            return jsonify({'error': 'Authentication failed'}), 500
         
         # Create pending status
         create_status_check(
