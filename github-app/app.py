@@ -47,10 +47,22 @@ logger.info(f"GitHub Enterprise URL: {GHES_URL}")
 
 # Initialize GitHub Integration
 try:
+    logger.info("Creating GitHub Integration...")
     integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
     logger.info("GitHub Integration initialized successfully")
+    
+    # Test the integration by getting app info
+    try:
+        app_info = integration.get_app()
+        logger.info(f"GitHub App verified: {app_info.name} (ID: {app_info.id})")
+    except Exception as e:
+        logger.warning(f"Could not verify app info (this might be okay): {e}")
+        
 except Exception as e:
     logger.error(f"Failed to initialize GitHub Integration: {str(e)}")
+    logger.error(f"APP_ID: {APP_ID}")
+    logger.error(f"PRIVATE_KEY length: {len(PRIVATE_KEY) if PRIVATE_KEY else 'None'}")
+    logger.error(f"GHES_URL: {GHES_URL}")
     raise
 
 class CopyrightValidator:
@@ -270,15 +282,43 @@ def get_installation_client(installation_id):
     """Get GitHub client for a specific installation"""
     try:
         logger.info(f"Getting access token for installation ID: {installation_id}")
+        
+        # Debug: Check if integration object is valid
+        if integration is None:
+            logger.error("Integration object is None")
+            raise ValueError("GitHub Integration not initialized")
+        
+        logger.info(f"Integration object type: {type(integration)}")
+        logger.info(f"App ID: {APP_ID}, GHES URL: {GHES_URL}")
+        
+        # Debug: Check if private key is valid
+        if PRIVATE_KEY is None:
+            logger.error("Private key is None")
+            raise ValueError("Private key not set")
+            
+        logger.info(f"Private key length: {len(PRIVATE_KEY) if PRIVATE_KEY else 'None'}")
+        logger.info(f"Private key starts with: {PRIVATE_KEY[:50] if PRIVATE_KEY else 'None'}...")
+        
+        # Try to get access token
+        logger.info("Calling integration.get_access_token()...")
         access_token = integration.get_access_token(installation_id)
         logger.info("Access token obtained successfully")
         
-        github_client = Github(access_token.token, base_url=f"{GHES_URL}/api/v3")
+        if access_token is None:
+            logger.error("Access token is None")
+            raise ValueError("Failed to get access token")
+            
+        logger.info(f"Access token type: {type(access_token)}")
+        
+        # Create GitHub client
+        base_url = f"{GHES_URL}/api/v3"
+        logger.info(f"Creating GitHub client with base URL: {base_url}")
+        github_client = Github(access_token.token, base_url=base_url)
         logger.info("GitHub client created successfully")
         return github_client
         
     except Exception as e:
-        logger.error(f"Failed to get GitHub client for installation {installation_id}: {str(e)}")
+        logger.error(f"Failed to get GitHub client for installation {installation_id}: {str(e)}", exc_info=True)
         raise
 
 def create_status_check(github_client, repo_full_name, commit_sha, state, description, details_url=None):
@@ -401,6 +441,49 @@ def webhook():
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'}), 200
+
+@app.route('/debug/integration', methods=['GET'])
+def debug_integration():
+    """Debug endpoint to test GitHub integration"""
+    try:
+        logger.info("Debug: Testing GitHub integration...")
+        
+        # Check environment variables
+        debug_info = {
+            'app_id': APP_ID,
+            'has_private_key': PRIVATE_KEY is not None,
+            'private_key_length': len(PRIVATE_KEY) if PRIVATE_KEY else 0,
+            'private_key_starts_with': PRIVATE_KEY[:50] if PRIVATE_KEY else None,
+            'ghes_url': GHES_URL,
+            'integration_type': str(type(integration)),
+        }
+        
+        logger.info(f"Debug info: {debug_info}")
+        
+        # Test getting app info
+        try:
+            app_info = integration.get_app()
+            debug_info['app_name'] = app_info.name
+            debug_info['app_owner'] = app_info.owner.login if app_info.owner else None
+        except Exception as e:
+            debug_info['app_error'] = str(e)
+            
+        # Test with a sample installation ID (if provided)
+        installation_id = request.args.get('installation_id')
+        if installation_id:
+            try:
+                installation_id = int(installation_id)
+                access_token = integration.get_access_token(installation_id)
+                debug_info['token_test'] = 'success'
+                debug_info['token_length'] = len(access_token.token)
+            except Exception as e:
+                debug_info['token_error'] = str(e)
+        
+        return jsonify(debug_info), 200
+        
+    except Exception as e:
+        logger.error(f"Debug integration failed: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Validate required environment variables
