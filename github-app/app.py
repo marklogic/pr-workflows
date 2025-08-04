@@ -29,8 +29,29 @@ PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
 WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET')
 GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com')
 
+# Validate required environment variables
+if not APP_ID:
+    logger.error("GITHUB_APP_ID environment variable is required")
+    raise ValueError("GITHUB_APP_ID not set")
+
+if not PRIVATE_KEY:
+    logger.error("GITHUB_PRIVATE_KEY environment variable is required")
+    raise ValueError("GITHUB_PRIVATE_KEY not set")
+
+if not GHES_URL:
+    logger.error("GITHUB_ENTERPRISE_URL environment variable is required")
+    raise ValueError("GITHUB_ENTERPRISE_URL not set")
+
+logger.info(f"Initializing GitHub App with ID: {APP_ID}")
+logger.info(f"GitHub Enterprise URL: {GHES_URL}")
+
 # Initialize GitHub Integration
-integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
+try:
+    integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
+    logger.info("GitHub Integration initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize GitHub Integration: {str(e)}")
+    raise
 
 class CopyrightValidator:
     def __init__(self, github_client, repo_full_name, pr_number):
@@ -227,8 +248,18 @@ class CopyrightValidator:
 
 def get_installation_client(installation_id):
     """Get GitHub client for a specific installation"""
-    access_token = integration.get_access_token(installation_id)
-    return Github(access_token.token, base_url=f"{GHES_URL}/api/v3")
+    try:
+        logger.info(f"Getting access token for installation ID: {installation_id}")
+        access_token = integration.get_access_token(installation_id)
+        logger.info("Access token obtained successfully")
+        
+        github_client = Github(access_token.token, base_url=f"{GHES_URL}/api/v3")
+        logger.info("GitHub client created successfully")
+        return github_client
+        
+    except Exception as e:
+        logger.error(f"Failed to get GitHub client for installation {installation_id}: {str(e)}")
+        raise
 
 def create_status_check(github_client, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit"""
