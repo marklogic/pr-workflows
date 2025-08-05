@@ -27,7 +27,7 @@ app = Flask(__name__)
 APP_ID = os.environ.get('GITHUB_APP_ID')
 PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
 WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET')
-GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com')
+GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com').rstrip('/')  # Remove trailing slash
 
 # GHES-specific options
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'true').lower() == 'true'
@@ -598,12 +598,20 @@ def debug_integration():
             for i, headers in enumerate(headers_variants):
                 try:
                     # Test app endpoint
-                    app_response = requests.get(f'{GHES_URL}/api/v3/app', headers=headers, verify=VERIFY_SSL)
+                    app_url = f'{GHES_URL}/api/v3/app'
+                    logger.info(f"Testing app URL: {app_url}")
+                    app_response = requests.get(app_url, headers=headers, verify=VERIFY_SSL)
                     debug_info[f'manual_app_status_{i}'] = app_response.status_code
+                    debug_info[f'manual_app_url_{i}'] = app_url  # Show the actual URL
                     if app_response.status_code == 200:
-                        debug_info[f'manual_app_response_{i}'] = app_response.text[:200]
-                        debug_info['working_accept_header'] = headers.get('Accept', 'none')
-                        break
+                        # Check if response is JSON
+                        try:
+                            app_data = app_response.json()
+                            debug_info[f'manual_app_response_{i}'] = str(app_data)[:200]
+                            debug_info['working_accept_header'] = headers.get('Accept', 'none')
+                            break
+                        except:
+                            debug_info[f'manual_app_response_{i}'] = app_response.text[:200]
                     else:
                         debug_info[f'manual_app_error_{i}'] = app_response.text[:100] if app_response.text else 'No response text'
                 except Exception as e:
@@ -614,10 +622,21 @@ def debug_integration():
             if 'working_accept_header' in debug_info:
                 working_headers = {'Authorization': f'Bearer {token}', 'Accept': debug_info['working_accept_header']}
             
-            install_response = requests.get(f'{GHES_URL}/api/v3/app/installations', headers=working_headers, verify=VERIFY_SSL)
+            install_url = f'{GHES_URL}/api/v3/app/installations'
+            logger.info(f"Testing installations URL: {install_url}")
+            debug_info['manual_install_url'] = install_url
+            install_response = requests.get(install_url, headers=working_headers, verify=VERIFY_SSL)
             debug_info['manual_install_status'] = install_response.status_code
             if install_response.status_code == 200:
-                debug_info['manual_install_response'] = install_response.text[:500]
+                try:
+                    install_data = install_response.json()
+                    debug_info['manual_install_response'] = str(install_data)[:500]
+                    if isinstance(install_data, list):
+                        debug_info['manual_install_count'] = len(install_data)
+                        if install_data:
+                            debug_info['manual_install_first'] = str(install_data[0])
+                except:
+                    debug_info['manual_install_response'] = install_response.text[:500]
             else:
                 debug_info['manual_install_error'] = install_response.text[:200] if install_response.text else 'No response text'
             
