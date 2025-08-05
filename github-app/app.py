@@ -508,25 +508,67 @@ def debug_integration():
         
         # Test getting app info
         try:
+            logger.info("Getting app info...")
             app_info = integration.get_app()
-            debug_info['app_name'] = getattr(app_info, 'name', None)
-            debug_info['app_owner'] = getattr(app_info.owner, 'login', None) if hasattr(app_info, 'owner') and app_info.owner else None
-            debug_info['app_test'] = 'success'
+            logger.info(f"App info type: {type(app_info)}")
+            logger.info(f"App info: {app_info}")
+            
+            if app_info is None:
+                debug_info['app_error'] = 'get_app() returned None'
+            else:
+                debug_info['app_name'] = getattr(app_info, 'name', None)
+                debug_info['app_id_from_api'] = getattr(app_info, 'id', None)
+                
+                # Handle owner safely
+                owner = getattr(app_info, 'owner', None)
+                if owner:
+                    debug_info['app_owner'] = getattr(owner, 'login', None)
+                else:
+                    debug_info['app_owner'] = None
+                    
+                debug_info['app_test'] = 'success'
         except Exception as e:
             debug_info['app_error'] = str(e)
             logger.error(f"App info error: {e}", exc_info=True)
             
-        # Test getting installations
+        # Test getting installations with better error handling
         try:
+            logger.info("Getting installations...")
             installations = integration.get_installations()
-            install_list = []
-            for install in installations:
-                install_id = getattr(install, 'id', None)
-                account_login = getattr(install.account, 'login', None) if hasattr(install, 'account') and install.account else None
-                if install_id:
-                    install_list.append((install_id, account_login))
-            debug_info['installations'] = install_list
-            debug_info['installation_count'] = len(install_list)
+            logger.info(f"Installations type: {type(installations)}")
+            logger.info(f"Installations: {installations}")
+            
+            if installations is None:
+                debug_info['installations_error'] = 'get_installations() returned None'
+                debug_info['installations'] = []
+                debug_info['installation_count'] = 0
+            else:
+                install_list = []
+                try:
+                    # Try to iterate over installations
+                    for install in installations:
+                        logger.info(f"Processing installation: {install}")
+                        install_id = getattr(install, 'id', None)
+                        
+                        # Handle account safely
+                        account = getattr(install, 'account', None)
+                        if account:
+                            account_login = getattr(account, 'login', None)
+                        else:
+                            account_login = None
+                            
+                        if install_id:
+                            install_list.append((install_id, account_login))
+                            logger.info(f"Added installation: {install_id}, {account_login}")
+                            
+                    debug_info['installations'] = install_list
+                    debug_info['installation_count'] = len(install_list)
+                    
+                except TypeError as te:
+                    debug_info['installations_error'] = f'TypeError iterating installations: {te}'
+                    debug_info['installations'] = []
+                    debug_info['installation_count'] = 0
+                    
         except Exception as e:
             debug_info['installations_error'] = str(e)
             logger.error(f"Installations error: {e}", exc_info=True)
@@ -549,6 +591,38 @@ def debug_integration():
             except Exception as e:
                 debug_info['token_error'] = str(e)
         
+        # Manual JWT test
+        try:
+            import jwt
+            import time
+            
+            logger.info("Testing manual JWT authentication...")
+            payload = {
+                'iat': int(time.time()),
+                'exp': int(time.time()) + 600,
+                'iss': APP_ID
+            }
+            token = jwt.encode(payload, PRIVATE_KEY, algorithm='RS256')
+            
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            # Test app endpoint
+            app_response = requests.get(f'{GHES_URL}/api/v3/app', headers=headers, verify=VERIFY_SSL)
+            debug_info['manual_app_status'] = app_response.status_code
+            debug_info['manual_app_response'] = app_response.text[:200] if app_response.text else None
+            
+            # Test installations endpoint
+            install_response = requests.get(f'{GHES_URL}/api/v3/app/installations', headers=headers, verify=VERIFY_SSL)
+            debug_info['manual_install_status'] = install_response.status_code
+            debug_info['manual_install_response'] = install_response.text[:200] if install_response.text else None
+            
+        except Exception as e:
+            debug_info['manual_jwt_error'] = str(e)
+            logger.error(f"Manual JWT error: {e}", exc_info=True)
+
         return jsonify(debug_info), 200
         
     except Exception as e:
