@@ -357,20 +357,50 @@ def get_installation_client(installation_id):
         raise
 
 def create_status_check(github_client, repo_full_name, commit_sha, state, description, details_url=None):
-    """Create a status check on the commit"""
+    """Create a status check on the commit using direct API call for GHES compatibility"""
     try:
         logger.info(f"Creating status check for {repo_full_name}@{commit_sha}: {state} - {description}")
-        repo = github_client.get_repo(repo_full_name)
-        repo.create_status(
-            sha=commit_sha,
-            state=state,  # pending, success, error, failure
-            target_url=details_url,
-            description=description,
-            context="copyright-validation"
-        )
-        logger.info("Status check created successfully")
+        
+        # Use direct API call instead of PyGithub method for GHES compatibility
+        import requests
+        
+        # Get the access token from the github client
+        # The github_client has an internal requester with the token
+        token = github_client._Github__requester._Requester__authorizationHeader.split()[-1]
+        
+        # Construct the API URL
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/statuses/{commit_sha}"
+        
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'state': state,
+            'description': description,
+            'context': 'copyright-validation'
+        }
+        
+        if details_url:
+            payload['target_url'] = details_url
+            
+        logger.info(f"Status check API URL: {api_url}")
+        logger.info(f"Status check payload: {payload}")
+        
+        response = requests.post(api_url, json=payload, headers=headers, verify=VERIFY_SSL)
+        
+        if response.status_code in [200, 201]:
+            logger.info("Status check created successfully")
+            logger.info(f"Response: {response.text}")
+        else:
+            logger.error(f"Status check failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            raise Exception(f"API returned {response.status_code}: {response.text}")
+            
     except Exception as e:
-        logger.error(f"Failed to create status check: {e}")
+        logger.error(f"Failed to create status check: {e}", exc_info=True)
         raise
 
 @app.route('/webhook', methods=['POST'])
