@@ -70,15 +70,8 @@ def create_integration():
 integration = create_integration()
 
 if integration:
-    # Test the integration by getting app info
-    try:
-        app_info = integration.get_app()
-        if app_info:
-            logger.info(f"GitHub App verified: {getattr(app_info, 'name', 'Unknown')} (ID: {getattr(app_info, 'id', 'Unknown')})")
-        else:
-            logger.warning("App info returned None")
-    except Exception as e:
-        logger.warning(f"Could not verify app info (this might be okay): {e}")
+    # Skip app verification due to PyGithub/GHES compatibility issue
+    logger.info("GitHub Integration created successfully (skipping app verification due to GHES compatibility)")
 else:
     logger.error("GitHub Integration could not be created")
 
@@ -506,30 +499,10 @@ def debug_integration():
         
         logger.info(f"Debug info: {debug_info}")
         
-        # Test getting app info
-        try:
-            logger.info("Getting app info...")
-            app_info = integration.get_app()
-            logger.info(f"App info type: {type(app_info)}")
-            logger.info(f"App info: {app_info}")
-            
-            if app_info is None:
-                debug_info['app_error'] = 'get_app() returned None'
-            else:
-                debug_info['app_name'] = getattr(app_info, 'name', None)
-                debug_info['app_id_from_api'] = getattr(app_info, 'id', None)
-                
-                # Handle owner safely
-                owner = getattr(app_info, 'owner', None)
-                if owner:
-                    debug_info['app_owner'] = getattr(owner, 'login', None)
-                else:
-                    debug_info['app_owner'] = None
-                    
-                debug_info['app_test'] = 'success'
-        except Exception as e:
-            debug_info['app_error'] = str(e)
-            logger.error(f"App info error: {e}", exc_info=True)
+        # Skip get_app() due to PyGithub/GHES compatibility issue
+        # The error is in PyGithub's GithubApp.py line 145 - it expects attributes dict but gets None
+        debug_info['app_test'] = 'skipped_due_to_pygithub_ghes_incompatibility'
+        debug_info['app_note'] = 'get_app() fails due to PyGithub expecting attributes dict but GHES returns None'
             
         # Test getting installations with better error handling
         try:
