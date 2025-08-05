@@ -395,6 +395,11 @@ class CopyrightValidator:
 def create_status_check(access_token, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit using direct API call"""
     try:
+        # Truncate description to GitHub's 140 character limit
+        max_description_length = 140
+        if len(description) > max_description_length:
+            description = description[:max_description_length-3] + "..."
+            
         logger.info(f"Creating status check for {repo_full_name}@{commit_sha}: {state} - {description}")
         
         # Construct the API URL
@@ -431,6 +436,105 @@ def create_status_check(access_token, repo_full_name, commit_sha, state, descrip
     except Exception as e:
         logger.error(f"Failed to create status check: {e}", exc_info=True)
         raise
+
+def create_pr_comment(access_token, repo_full_name, pr_number, comment_body):
+    """Create a comment on the PR with detailed validation results"""
+    try:
+        logger.info(f"Creating PR comment on {repo_full_name}#{pr_number}")
+        
+        # Construct the API URL for PR comments
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/{pr_number}/comments"
+        
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'body': comment_body
+        }
+        
+        logger.info(f"PR comment API URL: {api_url}")
+        
+        response = requests.post(api_url, json=payload, headers=headers, verify=VERIFY_SSL)
+        
+        if response.status_code in [200, 201]:
+            logger.info("PR comment created successfully")
+            comment_data = response.json()
+            return comment_data.get('html_url')
+        else:
+            logger.error(f"PR comment failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            # Don't raise exception - commenting is optional
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to create PR comment: {e}")
+        # Don't raise exception - commenting is optional
+        return None
+
+def format_validation_comment(result):
+    """Format validation results into a GitHub markdown comment"""
+    if result['success']:
+        # Success comment
+        files_checked = result.get('files_checked', 0)
+        emoji = "✅"
+        title = "Copyright Validation Passed"
+        summary = f"All {files_checked} file{'s' if files_checked != 1 else ''} passed copyright validation."
+        
+        comment = f"""## {emoji} {title}
+
+{summary}
+
+<details>
+<summary>Validation Details</summary>
+
+```
+{result.get('output', 'No detailed output available.')}
+```
+
+</details>
+"""
+    else:
+        # Failure comment
+        emoji = "❌"
+        title = "Copyright Validation Failed"
+        output = result.get('output', '')
+        
+        # Extract summary from output
+        files_checked = result.get('files_checked', 0)
+        invalid_count = output.count('❌') if output else 1
+        valid_count = files_checked - invalid_count if files_checked > 0 else 0
+        
+        summary = f"Copyright validation failed for {invalid_count} file{'s' if invalid_count != 1 else ''}."
+        if valid_count > 0:
+            summary += f" {valid_count} file{'s' if valid_count != 1 else ''} passed."
+        
+        comment = f"""## {emoji} {title}
+
+{summary}
+
+<details>
+<summary>Validation Results</summary>
+
+```
+{output}
+```
+
+</details>
+
+### 🔧 How to Fix
+
+1. **Add copyright header** to the beginning of each file
+2. **Use the expected format** shown in the validation results
+3. **Update year range** if needed (e.g., 2003-2025)
+4. **Commit and push** your changes
+
+The validation will run again automatically when you update the PR.
+"""
+    
+    return comment
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -512,16 +616,37 @@ def webhook():
                 repo_full_name,
                 commit_sha,
                 'success',
-                f"Copyright validation passed ({result.get('files_checked', 0)} files checked)"
+                f"Copyright validation passed ({result.get('files_checked', 0)} files)"
             )
         else:
+            # Count invalid files for concise message
+            invalid_count = result.get('output', '').count('❌') if result.get('output') else 1
             create_status_check(
                 access_token,
                 repo_full_name,
                 commit_sha,
                 'failure',
-                f"Copyright validation failed: {result.get('error', 'Unknown error')}"
+                f"Copyright validation failed ({invalid_count} file{'s' if invalid_count != 1 else ''} invalid)"
             )
+        
+        # Create PR comment with detailed results
+        try:
+            comment_body = format_validation_comment(result)
+            comment_url = create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
+            if comment_url:
+                logger.info(f"PR comment created: {comment_url}")
+            else:
+                logger.warning("PR comment creation failed (check if app has 'Pull requests: Write' permission)")
+        except Exception as e:
+            logger.error(f"Failed to create PR comment: {e}")
+            logger.warning("PR comment failed - continuing with status check only")
+        
+        # Create PR comment with detailed results
+        try:
+            comment_body = format_validation_comment(result)
+            create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
+        except Exception as e:
+            logger.error(f"Failed to create PR comment: {e}")
         
         logger.info(f"Copyright validation completed for PR #{pr_number}: {'PASSED' if result['success'] else 'FAILED'}")
         
