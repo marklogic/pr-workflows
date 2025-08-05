@@ -81,13 +81,6 @@ if integration:
         logger.warning(f"Could not verify app info (this might be okay): {e}")
 else:
     logger.error("GitHub Integration could not be created")
-        
-except Exception as e:
-    logger.error(f"Failed to initialize GitHub Integration: {str(e)}")
-    logger.error(f"APP_ID: {APP_ID}")
-    logger.error(f"PRIVATE_KEY length: {len(PRIVATE_KEY) if PRIVATE_KEY else 'None'}")
-    logger.error(f"GHES_URL: {GHES_URL}")
-    raise
 
 class CopyrightValidator:
     def __init__(self, github_client, repo_full_name, pr_number):
