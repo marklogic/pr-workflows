@@ -123,6 +123,7 @@ class CopyrightValidator:
             self.repo_full_name = repo_full_name
             self.pr_number = pr_number
             self.temp_dir = None
+            self.diff_applied = False  # Track whether PR diff was applied successfully
             
             # API headers
             self.headers = {
@@ -249,45 +250,82 @@ class CopyrightValidator:
             return []
 
     def download_files(self, file_paths):
-        """Download files from PR head using direct API call"""
+        """Download files by cloning base repo and applying PR diff"""
         try:
+            # Get the PR diff/patch
+            diff_url = f"{GHES_URL}/api/v3/repos/{self.repo_full_name}/pulls/{self.pr_number}"
+            diff_headers = self.headers.copy()
+            diff_headers['Accept'] = 'application/vnd.github.v3.diff'
+            
+            logger.info(f"Getting PR diff from: {diff_url}")
+            diff_response = requests.get(diff_url, headers=diff_headers, verify=VERIFY_SSL)
+            
+            if diff_response.status_code != 200:
+                logger.error(f"Failed to get PR diff: {diff_response.status_code}")
+                raise Exception(f"Cannot get PR diff: {diff_response.status_code}")
+            
+            # Write diff to file
+            diff_path = os.path.join(self.temp_dir, 'pr.diff')
+            with open(diff_path, 'w') as f:
+                f.write(diff_response.text)
+            
+            logger.info(f"PR diff saved to {diff_path} ({len(diff_response.text)} bytes)")
+            
+            # Clone the base repository
+            base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
+            
+            clone_url = f"{GHES_URL}/{self.repo_full_name}.git"
+            logger.info(f"Cloning base repository: {clone_url}")
+            
+            # Use git clone with authentication
+            token = self.headers['Authorization'].replace('token ', '')
+            auth_clone_url = f"https://x-access-token:{token}@{GHES_URL.replace('https://', '')}/{self.repo_full_name}.git"
+            
+            result = subprocess.run([
+                'git', 'clone', '--depth', '1', 
+                '--branch', self.pr_data['base']['ref'],
+                auth_clone_url, base_clone_dir
+            ], capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                logger.error(f"Git clone failed: {result.stderr}")
+                raise Exception(f"Git clone failed: {result.stderr}")
+            
+            logger.info("Base repository cloned successfully")
+            
+            # Try to apply the diff
+            logger.info("Attempting to apply PR diff to base repository")
+            apply_result = subprocess.run([
+                'git', 'apply', '--ignore-whitespace', '--reject', diff_path
+            ], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            
+            # Track whether diff was applied successfully
+            self.diff_applied = apply_result.returncode == 0
+            
+            if not self.diff_applied:
+                logger.warning(f"Could not apply PR diff: {apply_result.stderr}")
+                logger.info("Validating copyright on base repository files only")
+            else:
+                logger.info("PR diff applied successfully")
+            
+            # Copy the files we need to our working directory
             downloaded_files = []
-            head_sha = self.pr_data['head']['sha']
-            head_repo_name = self.pr_data['head']['repo']['full_name']
-            
             for file_path in file_paths:
-                try:
-                    # Get file content
-                    file_url = f"{GHES_URL}/api/v3/repos/{head_repo_name}/contents/{file_path}?ref={head_sha}"
-                    logger.info(f"Downloading file: {file_url}")
-                    
-                    response = requests.get(file_url, headers=self.headers, verify=VERIFY_SSL)
-                    if response.status_code == 200:
-                        file_data = response.json()
-                        
-                        # Decode file content
-                        if file_data.get('encoding') == 'base64':
-                            file_content = base64.b64decode(file_data['content']).decode('utf-8')
-                        else:
-                            file_content = file_data['content']
-                        
-                        # Save to temp directory
-                        local_path = os.path.join(self.temp_dir, file_path)
-                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                        
-                        with open(local_path, 'w') as f:
-                            f.write(file_content)
-                            
-                        downloaded_files.append(local_path)
-                        logger.info(f"Downloaded: {file_path}")
-                    else:
-                        logger.warning(f"Failed to download {file_path}: {response.status_code}")
-                        
-                except Exception as e:
-                    logger.error(f"Error downloading {file_path}: {e}")
-                    continue
+                source_path = os.path.join(base_clone_dir, file_path)
+                dest_path = os.path.join(self.temp_dir, file_path)
+                
+                # Create directory if needed
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                
+                if os.path.exists(source_path):
+                    shutil.copy2(source_path, dest_path)
+                    downloaded_files.append(dest_path)
+                    logger.info(f"Copied file: {file_path}")
+                else:
+                    logger.warning(f"File not found: {file_path}")
             
-            logger.info(f"Downloaded {len(downloaded_files)} files")
+            status = "with PR changes" if self.diff_applied else "base files only"
+            logger.info(f"Successfully processed {len(downloaded_files)} files ({status})")
             return downloaded_files
             
         except Exception as e:
@@ -542,12 +580,17 @@ def update_pr_comment(access_token, repo_full_name, comment_id, comment_body):
         logger.error(f"Failed to update PR comment: {e}")
         return None
 
-def format_validation_comment(result, commit_sha):
+def format_validation_comment(result, commit_sha, diff_applied=True):
     """Format validation results into a GitHub markdown comment"""
     # Add timestamp and commit info for tracking
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
     commit_short = commit_sha[:7]
+    
+    # Add diff status info
+    diff_status = ""
+    if not diff_applied:
+        diff_status = "\n⚠️ **Note:** Could not apply PR diff - validation performed on base repository files only.\n"
     
     if result['success']:
         # Success comment
@@ -558,7 +601,7 @@ def format_validation_comment(result, commit_sha):
         
         comment = f"""## {emoji} {title}
 
-{summary}
+{summary}{diff_status}
 
 **Commit:** `{commit_short}` | **Time:** {timestamp}
 
@@ -590,7 +633,7 @@ def format_validation_comment(result, commit_sha):
         
         comment = f"""## {emoji} {title}
 
-{summary}
+{summary}{diff_status}
 
 **Commit:** `{commit_short}` | **Time:** {timestamp}
 
@@ -712,7 +755,7 @@ def webhook():
         
         # Create PR comment with detailed results
         try:
-            comment_body = format_validation_comment(result)
+            comment_body = format_validation_comment(result, commit_sha, validator.diff_applied)
             existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
             
             if existing_comment_id:
