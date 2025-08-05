@@ -356,8 +356,8 @@ class CopyrightValidator:
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
             result = subprocess.run([
                 'python3', script_path,
-                '--config', config_path,
-                '--files'] + downloaded_files,
+                '--config', config_path
+            ] + downloaded_files,  # Add files as positional arguments
                 cwd=self.temp_dir,
                 capture_output=True,
                 text=True,
