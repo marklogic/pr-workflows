@@ -509,7 +509,6 @@ def debug_integration():
             logger.info("Getting installations...")
             installations = integration.get_installations()
             logger.info(f"Installations type: {type(installations)}")
-            logger.info(f"Installations: {installations}")
             
             if installations is None:
                 debug_info['installations_error'] = 'get_installations() returned None'
@@ -519,8 +518,11 @@ def debug_integration():
                 install_list = []
                 try:
                     # Try to iterate over installations
-                    for install in installations:
-                        logger.info(f"Processing installation: {install}")
+                    installation_objects = list(installations)  # Convert PaginatedList to list
+                    logger.info(f"Found {len(installation_objects)} installation objects")
+                    
+                    for i, install in enumerate(installation_objects):
+                        logger.info(f"Processing installation {i}: {install}")
                         install_id = getattr(install, 'id', None)
                         
                         # Handle account safely
@@ -533,12 +535,19 @@ def debug_integration():
                         if install_id:
                             install_list.append((install_id, account_login))
                             logger.info(f"Added installation: {install_id}, {account_login}")
+                        else:
+                            logger.warning(f"Installation {i} has no ID: {install}")
                             
                     debug_info['installations'] = install_list
                     debug_info['installation_count'] = len(install_list)
+                    debug_info['raw_installation_count'] = len(installation_objects)
                     
                 except TypeError as te:
                     debug_info['installations_error'] = f'TypeError iterating installations: {te}'
+                    debug_info['installations'] = []
+                    debug_info['installation_count'] = 0
+                except Exception as iter_e:
+                    debug_info['installations_error'] = f'Error iterating: {iter_e}'
                     debug_info['installations'] = []
                     debug_info['installation_count'] = 0
                     
@@ -564,7 +573,7 @@ def debug_integration():
             except Exception as e:
                 debug_info['token_error'] = str(e)
         
-        # Manual JWT test
+        # Manual JWT test with different headers for GHES compatibility
         try:
             import jwt
             import time
@@ -577,20 +586,40 @@ def debug_integration():
             }
             token = jwt.encode(payload, PRIVATE_KEY, algorithm='RS256')
             
-            headers = {
-                'Authorization': f'Bearer {token}',
-                'Accept': 'application/vnd.github.v3+json'
-            }
+            # Try different Accept headers for GHES compatibility (including curl format)
+            headers_variants = [
+                {'Authorization': f'Bearer {token}', 'Accept': '*/*', 'User-Agent': 'curl/7.88.1'},  # Exact curl format
+                {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github.v3+json'},
+                {'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                {'Authorization': f'Bearer {token}'},  # No Accept header
+                {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'},
+            ]
             
-            # Test app endpoint
-            app_response = requests.get(f'{GHES_URL}/api/v3/app', headers=headers, verify=VERIFY_SSL)
-            debug_info['manual_app_status'] = app_response.status_code
-            debug_info['manual_app_response'] = app_response.text[:200] if app_response.text else None
+            for i, headers in enumerate(headers_variants):
+                try:
+                    # Test app endpoint
+                    app_response = requests.get(f'{GHES_URL}/api/v3/app', headers=headers, verify=VERIFY_SSL)
+                    debug_info[f'manual_app_status_{i}'] = app_response.status_code
+                    if app_response.status_code == 200:
+                        debug_info[f'manual_app_response_{i}'] = app_response.text[:200]
+                        debug_info['working_accept_header'] = headers.get('Accept', 'none')
+                        break
+                    else:
+                        debug_info[f'manual_app_error_{i}'] = app_response.text[:100] if app_response.text else 'No response text'
+                except Exception as e:
+                    debug_info[f'manual_app_exception_{i}'] = str(e)
             
-            # Test installations endpoint
-            install_response = requests.get(f'{GHES_URL}/api/v3/app/installations', headers=headers, verify=VERIFY_SSL)
+            # Test installations with working header (if found) or default
+            working_headers = headers_variants[0]  # Default to first
+            if 'working_accept_header' in debug_info:
+                working_headers = {'Authorization': f'Bearer {token}', 'Accept': debug_info['working_accept_header']}
+            
+            install_response = requests.get(f'{GHES_URL}/api/v3/app/installations', headers=working_headers, verify=VERIFY_SSL)
             debug_info['manual_install_status'] = install_response.status_code
-            debug_info['manual_install_response'] = install_response.text[:200] if install_response.text else None
+            if install_response.status_code == 200:
+                debug_info['manual_install_response'] = install_response.text[:500]
+            else:
+                debug_info['manual_install_error'] = install_response.text[:200] if install_response.text else 'No response text'
             
         except Exception as e:
             debug_info['manual_jwt_error'] = str(e)
