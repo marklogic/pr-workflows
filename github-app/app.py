@@ -29,6 +29,9 @@ PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
 WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET')
 GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com')
 
+# GHES-specific options
+VERIFY_SSL = os.environ.get('VERIFY_SSL', 'true').lower() == 'true'
+
 # Validate required environment variables
 if not APP_ID:
     logger.error("GITHUB_APP_ID environment variable is required")
@@ -44,19 +47,40 @@ if not GHES_URL:
 
 logger.info(f"Initializing GitHub App with ID: {APP_ID}")
 logger.info(f"GitHub Enterprise URL: {GHES_URL}")
+logger.info(f"SSL Verification: {VERIFY_SSL}")
+
+# Disable SSL warnings if verification is disabled
+if not VERIFY_SSL:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    logger.warning("SSL verification disabled - use only for testing!")
 
 # Initialize GitHub Integration
-try:
-    logger.info("Creating GitHub Integration...")
-    integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
-    logger.info("GitHub Integration initialized successfully")
-    
+def create_integration():
+    """Create GitHub Integration with error handling"""
+    try:
+        logger.info("Creating GitHub Integration...")
+        integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
+        logger.info("GitHub Integration initialized successfully")
+        return integration
+    except Exception as e:
+        logger.error(f"Failed to create GitHub Integration: {e}")
+        return None
+
+integration = create_integration()
+
+if integration:
     # Test the integration by getting app info
     try:
         app_info = integration.get_app()
-        logger.info(f"GitHub App verified: {app_info.name} (ID: {app_info.id})")
+        if app_info:
+            logger.info(f"GitHub App verified: {getattr(app_info, 'name', 'Unknown')} (ID: {getattr(app_info, 'id', 'Unknown')})")
+        else:
+            logger.warning("App info returned None")
     except Exception as e:
         logger.warning(f"Could not verify app info (this might be okay): {e}")
+else:
+    logger.error("GitHub Integration could not be created")
         
 except Exception as e:
     logger.error(f"Failed to initialize GitHub Integration: {str(e)}")
@@ -297,10 +321,35 @@ def get_installation_client(installation_id):
             raise ValueError("Private key not set")
             
         logger.info(f"Private key length: {len(PRIVATE_KEY) if PRIVATE_KEY else 'None'}")
-        logger.info(f"Private key starts with: {PRIVATE_KEY[:50] if PRIVATE_KEY else 'None'}...")
+        
+        # Debug: Test if we can make a basic API call first
+        try:
+            logger.info("Testing basic API access by getting app info...")
+            app_info = integration.get_app()
+            logger.info(f"App info retrieved: {app_info.name} (ID: {app_info.id})")
+        except Exception as e:
+            logger.error(f"Failed to get app info: {e}")
+            raise ValueError(f"Cannot access GitHub API: {e}")
+        
+        # Debug: List all installations first
+        try:
+            logger.info("Getting list of installations...")
+            installations = integration.get_installations()
+            install_list = [(install.id, install.account.login) for install in installations]
+            logger.info(f"Available installations: {install_list}")
+            
+            # Check if our installation ID is in the list
+            install_ids = [install.id for install in installations]
+            if installation_id not in install_ids:
+                logger.error(f"Installation ID {installation_id} not found in available installations: {install_ids}")
+                raise ValueError(f"Installation {installation_id} not accessible")
+                
+        except Exception as e:
+            logger.error(f"Failed to get installations: {e}")
+            # Continue anyway, maybe it's a permission issue with listing
         
         # Try to get access token
-        logger.info("Calling integration.get_access_token()...")
+        logger.info(f"Calling integration.get_access_token({installation_id})...")
         access_token = integration.get_access_token(installation_id)
         logger.info("Access token obtained successfully")
         
@@ -448,6 +497,10 @@ def debug_integration():
     try:
         logger.info("Debug: Testing GitHub integration...")
         
+        # Check if integration was created successfully
+        if not integration:
+            return jsonify({'error': 'GitHub Integration not initialized'}), 500
+        
         # Check environment variables
         debug_info = {
             'app_id': APP_ID,
@@ -463,16 +516,40 @@ def debug_integration():
         # Test getting app info
         try:
             app_info = integration.get_app()
-            debug_info['app_name'] = app_info.name
-            debug_info['app_owner'] = app_info.owner.login if app_info.owner else None
+            debug_info['app_name'] = getattr(app_info, 'name', None)
+            debug_info['app_owner'] = getattr(app_info.owner, 'login', None) if hasattr(app_info, 'owner') and app_info.owner else None
+            debug_info['app_test'] = 'success'
         except Exception as e:
             debug_info['app_error'] = str(e)
+            logger.error(f"App info error: {e}", exc_info=True)
+            
+        # Test getting installations
+        try:
+            installations = integration.get_installations()
+            install_list = []
+            for install in installations:
+                install_id = getattr(install, 'id', None)
+                account_login = getattr(install.account, 'login', None) if hasattr(install, 'account') and install.account else None
+                if install_id:
+                    install_list.append((install_id, account_login))
+            debug_info['installations'] = install_list
+            debug_info['installation_count'] = len(install_list)
+        except Exception as e:
+            debug_info['installations_error'] = str(e)
+            logger.error(f"Installations error: {e}", exc_info=True)
             
         # Test with a sample installation ID (if provided)
         installation_id = request.args.get('installation_id')
         if installation_id:
             try:
                 installation_id = int(installation_id)
+                debug_info['testing_installation'] = installation_id
+                
+                # Check if this installation is in our list
+                if 'installations' in debug_info:
+                    install_ids = [install[0] for install in debug_info['installations']]
+                    debug_info['installation_in_list'] = installation_id in install_ids
+                
                 access_token = integration.get_access_token(installation_id)
                 debug_info['token_test'] = 'success'
                 debug_info['token_length'] = len(access_token.token)
