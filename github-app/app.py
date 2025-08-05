@@ -474,8 +474,81 @@ def create_pr_comment(access_token, repo_full_name, pr_number, comment_body):
         # Don't raise exception - commenting is optional
         return None
 
-def format_validation_comment(result):
+def find_existing_comment(access_token, repo_full_name, pr_number):
+    """Find existing copyright validation comment on the PR"""
+    try:
+        logger.info(f"Checking for existing comments on {repo_full_name}#{pr_number}")
+        
+        # Get PR comments
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/{pr_number}/comments"
+        
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        
+        response = requests.get(api_url, headers=headers, verify=VERIFY_SSL)
+        
+        if response.status_code == 200:
+            comments = response.json()
+            
+            # Look for existing copyright validation comment
+            for comment in comments:
+                if comment.get('body', '').startswith('## ✅ Copyright Validation') or \
+                   comment.get('body', '').startswith('## ❌ Copyright Validation'):
+                    logger.info(f"Found existing comment: {comment['id']}")
+                    return comment['id']
+            
+            logger.info("No existing copyright validation comment found")
+            return None
+        else:
+            logger.error(f"Failed to get PR comments: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to check for existing comments: {e}")
+        return None
+
+def update_pr_comment(access_token, repo_full_name, comment_id, comment_body):
+    """Update an existing PR comment"""
+    try:
+        logger.info(f"Updating existing comment {comment_id} on {repo_full_name}")
+        
+        # Update comment API URL
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/comments/{comment_id}"
+        
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'body': comment_body
+        }
+        
+        response = requests.patch(api_url, json=payload, headers=headers, verify=VERIFY_SSL)
+        
+        if response.status_code in [200, 201]:
+            logger.info("PR comment updated successfully")
+            comment_data = response.json()
+            return comment_data.get('html_url')
+        else:
+            logger.error(f"PR comment update failed: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to update PR comment: {e}")
+        return None
+
+def format_validation_comment(result, commit_sha):
     """Format validation results into a GitHub markdown comment"""
+    # Add timestamp and commit info for tracking
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    commit_short = commit_sha[:7]
+    
     if result['success']:
         # Success comment
         files_checked = result.get('files_checked', 0)
@@ -487,6 +560,8 @@ def format_validation_comment(result):
 
 {summary}
 
+**Commit:** `{commit_short}` | **Time:** {timestamp}
+
 <details>
 <summary>Validation Details</summary>
 
@@ -495,6 +570,8 @@ def format_validation_comment(result):
 ```
 
 </details>
+
+<!-- copyright-validation-result: {commit_sha} -->
 """
     else:
         # Failure comment
@@ -515,6 +592,8 @@ def format_validation_comment(result):
 
 {summary}
 
+**Commit:** `{commit_short}` | **Time:** {timestamp}
+
 <details>
 <summary>Validation Results</summary>
 
@@ -532,6 +611,8 @@ def format_validation_comment(result):
 4. **Commit and push** your changes
 
 The validation will run again automatically when you update the PR.
+
+<!-- copyright-validation-result: {commit_sha} -->
 """
     
     return comment
@@ -632,21 +713,21 @@ def webhook():
         # Create PR comment with detailed results
         try:
             comment_body = format_validation_comment(result)
-            comment_url = create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
-            if comment_url:
-                logger.info(f"PR comment created: {comment_url}")
+            existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
+            
+            if existing_comment_id:
+                # Update existing comment
+                update_pr_comment(access_token, repo_full_name, existing_comment_id, comment_body)
             else:
-                logger.warning("PR comment creation failed (check if app has 'Pull requests: Write' permission)")
+                # Create new comment
+                comment_url = create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
+                if comment_url:
+                    logger.info(f"PR comment created: {comment_url}")
+                else:
+                    logger.warning("PR comment creation failed (check if app has 'Pull requests: Write' permission)")
         except Exception as e:
-            logger.error(f"Failed to create PR comment: {e}")
+            logger.error(f"Failed to create or update PR comment: {e}")
             logger.warning("PR comment failed - continuing with status check only")
-        
-        # Create PR comment with detailed results
-        try:
-            comment_body = format_validation_comment(result)
-            create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
-        except Exception as e:
-            logger.error(f"Failed to create PR comment: {e}")
         
         logger.info(f"Copyright validation completed for PR #{pr_number}: {'PASSED' if result['success'] else 'FAILED'}")
         
