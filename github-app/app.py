@@ -3,7 +3,7 @@
 GitHub App for Copyright Validation on GHES
 
 This app listens to PR webhooks and validates copyright headers
-using the same copyrightcheck.py script as the GitHub Actions workflow.
+using direct API calls (no PyGithub dependency for GHES compatibility).
 """
 
 import os
@@ -12,10 +12,12 @@ import logging
 import tempfile
 import requests
 from flask import Flask, request, jsonify
-from github import Github, GithubIntegration
+import jwt
+import time
 import subprocess
 import shutil
 from pathlib import Path
+import base64
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,40 +57,83 @@ if not VERIFY_SSL:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     logger.warning("SSL verification disabled - use only for testing!")
 
-# Initialize GitHub Integration
-def create_integration():
-    """Create GitHub Integration with error handling"""
+def create_jwt_token():
+    """Create JWT token for GitHub App authentication"""
     try:
-        logger.info("Creating GitHub Integration...")
-        integration = GithubIntegration(APP_ID, PRIVATE_KEY, base_url=f"{GHES_URL}/api/v3")
-        logger.info("GitHub Integration initialized successfully")
-        return integration
+        payload = {
+            'iat': int(time.time()),
+            'exp': int(time.time()) + 600,  # 10 minutes
+            'iss': APP_ID
+        }
+        token = jwt.encode(payload, PRIVATE_KEY, algorithm='RS256')
+        return token
     except Exception as e:
-        logger.error(f"Failed to create GitHub Integration: {e}")
+        logger.error(f"Failed to create JWT token: {e}")
         return None
 
-integration = create_integration()
+def get_installation_access_token(installation_id):
+    """Get installation access token using direct API call"""
+    try:
+        jwt_token = create_jwt_token()
+        if not jwt_token:
+            raise Exception("Failed to create JWT token")
+        
+        headers = {
+            'Authorization': f'Bearer {jwt_token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{GHES_URL}/api/v3/app/installations/{installation_id}/access_tokens"
+        logger.info(f"Getting installation token from: {url}")
+        
+        response = requests.post(url, headers=headers, verify=VERIFY_SSL)
+        
+        if response.status_code == 201:
+            token_data = response.json()
+            logger.info("Installation access token obtained successfully")
+            return token_data['token']
+        else:
+            logger.error(f"Failed to get installation token: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            raise Exception(f"Token request failed: {response.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Failed to get installation access token: {e}")
+        raise
 
-if integration:
-    # Skip app verification due to PyGithub/GHES compatibility issue
-    logger.info("GitHub Integration created successfully (skipping app verification due to GHES compatibility)")
+# Test GitHub App setup
+jwt_token = create_jwt_token()
+if jwt_token:
+    logger.info("GitHub App JWT token created successfully")
 else:
-    logger.error("GitHub Integration could not be created")
+    logger.error("Failed to create GitHub App JWT token")
 
 class CopyrightValidator:
-    def __init__(self, github_client, repo_full_name, pr_number):
+    def __init__(self, access_token, repo_full_name, pr_number):
         try:
             logger.info(f"Initializing CopyrightValidator for {repo_full_name}#{pr_number}")
-            self.github = github_client
-            
-            logger.info(f"Getting repository: {repo_full_name}")
-            self.repo = self.github.get_repo(repo_full_name)
-            
-            logger.info(f"Getting pull request #{pr_number}")
-            self.pr = self.repo.get_pull(pr_number)
-            
+            self.access_token = access_token
+            self.repo_full_name = repo_full_name
+            self.pr_number = pr_number
             self.temp_dir = None
-            logger.info("CopyrightValidator initialized successfully")
+            
+            # API headers
+            self.headers = {
+                'Authorization': f'token {access_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            # Get PR data
+            pr_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/pulls/{pr_number}"
+            logger.info(f"Getting PR data from: {pr_url}")
+            
+            response = requests.get(pr_url, headers=self.headers, verify=VERIFY_SSL)
+            if response.status_code != 200:
+                raise Exception(f"Failed to get PR data: {response.status_code}")
+            
+            self.pr_data = response.json()
+            logger.info(f"PR data retrieved successfully: {self.pr_data['title']}")
             
         except Exception as e:
             logger.error(f"Failed to initialize CopyrightValidator: {e}")
@@ -105,34 +150,49 @@ class CopyrightValidator:
             shutil.rmtree(self.temp_dir)
     
     def get_config_file(self):
-        """Get .copyrightconfig from PR head or base repo"""
+        """Get .copyrightconfig from PR head or base repo using direct API calls"""
         config_content = None
         config_source = None
         
         try:
             logger.info("Attempting to get config from PR head...")
             # Try to get config from PR head first
-            head_repo_name = self.pr.head.repo.full_name
-            logger.info(f"Getting repository: {head_repo_name}")
-            head_repo = self.github.get_repo(head_repo_name)
+            head_repo_name = self.pr_data['head']['repo']['full_name']
+            head_sha = self.pr_data['head']['sha']
             
-            logger.info(f"Getting .copyrightconfig from {head_repo_name} at {self.pr.head.sha}")
-            config_file = head_repo.get_contents('.copyrightconfig', ref=self.pr.head.sha)
-            config_content = config_file.decoded_content.decode('utf-8')
-            config_source = "PR head"
-            logger.info(f"Found .copyrightconfig in PR head")
+            config_url = f"{GHES_URL}/api/v3/repos/{head_repo_name}/contents/.copyrightconfig?ref={head_sha}"
+            logger.info(f"Getting config from: {config_url}")
+            
+            response = requests.get(config_url, headers=self.headers, verify=VERIFY_SSL)
+            if response.status_code == 200:
+                config_data = response.json()
+                config_content = base64.b64decode(config_data['content']).decode('utf-8')
+                config_source = "PR head"
+                logger.info(f"Found .copyrightconfig in PR head")
+            else:
+                raise Exception(f"Config not found in PR head: {response.status_code}")
+                
         except Exception as e:
             logger.info(f"Config not found in PR head: {e}")
             
             try:
                 logger.info("Attempting to get config from base repository...")
                 # Fallback to base repo
-                base_repo_name = self.repo.full_name
-                logger.info(f"Getting .copyrightconfig from {base_repo_name} at {self.pr.base.ref}")
-                config_file = self.repo.get_contents('.copyrightconfig', ref=self.pr.base.ref)
-                config_content = config_file.decoded_content.decode('utf-8')
-                config_source = "base repository"
-                logger.info(f"Found .copyrightconfig in base repository")
+                base_repo_name = self.pr_data['base']['repo']['full_name']
+                base_ref = self.pr_data['base']['ref']
+                
+                config_url = f"{GHES_URL}/api/v3/repos/{base_repo_name}/contents/.copyrightconfig?ref={base_ref}"
+                logger.info(f"Getting config from: {config_url}")
+                
+                response = requests.get(config_url, headers=self.headers, verify=VERIFY_SSL)
+                if response.status_code == 200:
+                    config_data = response.json()
+                    config_content = base64.b64decode(config_data['content']).decode('utf-8')
+                    config_source = "base repository"
+                    logger.info(f"Found .copyrightconfig in base repository")
+                else:
+                    raise Exception(f"Config not found in base repo: {response.status_code}")
+                    
             except Exception as e:
                 logger.error(f"Config not found in base repo either: {e}")
                 return None, None
@@ -150,229 +210,186 @@ class CopyrightValidator:
             logger.error(f"Failed to write config file: {e}")
             return None, None
             
+        logger.info(f"Config file saved to {config_path} (source: {config_source})")
         return config_path, config_source
-    
+
     def get_changed_files(self):
-        """Get list of changed files in the PR"""
+        """Get list of changed files from PR using direct API call"""
         try:
-            files = []
-            pr_files = self.pr.get_files()
+            # Get PR files
+            files_url = f"{GHES_URL}/api/v3/repos/{self.repo_full_name}/pulls/{self.pr_number}/files"
+            logger.info(f"Getting changed files from: {files_url}")
             
-            if pr_files is None:
-                logger.warning("PR get_files() returned None")
-                return []
-                
-            for file in pr_files:
-                if file and file.status in ['added', 'modified']:  # Skip deleted files
-                    files.append(file.filename)
+            response = requests.get(files_url, headers=self.headers, verify=VERIFY_SSL)
+            if response.status_code != 200:
+                raise Exception(f"Failed to get PR files: {response.status_code}")
             
-            logger.info(f"Found {len(files)} changed files: {files}")
-            return files
+            files_data = response.json()
+            changed_files = []
+            
+            for file_data in files_data:
+                if file_data['status'] in ['added', 'modified']:
+                    filename = file_data['filename']
+                    # Skip dotfiles
+                    if not filename.startswith('.'):
+                        changed_files.append(filename)
+                        logger.info(f"Changed file: {filename}")
+            
+            logger.info(f"Found {len(changed_files)} changed files (excluding dotfiles)")
+            return changed_files
             
         except Exception as e:
-            logger.error(f"Error getting changed files: {e}")
+            logger.error(f"Failed to get changed files: {e}")
             return []
-    
-    def download_file_content(self, file_path):
-        """Download file content from PR head"""
+
+    def download_files(self, file_paths):
+        """Download files from PR head using direct API call"""
         try:
-            head_repo = self.github.get_repo(self.pr.head.repo.full_name)
-            file_content = head_repo.get_contents(file_path, ref=self.pr.head.sha)
+            downloaded_files = []
+            head_sha = self.pr_data['head']['sha']
+            head_repo_name = self.pr_data['head']['repo']['full_name']
             
-            # Save file to temp directory
-            full_path = os.path.join(self.temp_dir, 'target-repo', file_path)
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            for file_path in file_paths:
+                try:
+                    # Get file content
+                    file_url = f"{GHES_URL}/api/v3/repos/{head_repo_name}/contents/{file_path}?ref={head_sha}"
+                    logger.info(f"Downloading file: {file_url}")
+                    
+                    response = requests.get(file_url, headers=self.headers, verify=VERIFY_SSL)
+                    if response.status_code == 200:
+                        file_data = response.json()
+                        
+                        # Decode file content
+                        if file_data.get('encoding') == 'base64':
+                            file_content = base64.b64decode(file_data['content']).decode('utf-8')
+                        else:
+                            file_content = file_data['content']
+                        
+                        # Save to temp directory
+                        local_path = os.path.join(self.temp_dir, file_path)
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        
+                        with open(local_path, 'w') as f:
+                            f.write(file_content)
+                            
+                        downloaded_files.append(local_path)
+                        logger.info(f"Downloaded: {file_path}")
+                    else:
+                        logger.warning(f"Failed to download {file_path}: {response.status_code}")
+                        
+                except Exception as e:
+                    logger.error(f"Error downloading {file_path}: {e}")
+                    continue
             
-            with open(full_path, 'wb') as f:
-                f.write(file_content.decoded_content)
+            logger.info(f"Downloaded {len(downloaded_files)} files")
+            return downloaded_files
             
-            return full_path
         except Exception as e:
-            logger.error(f"Failed to download {file_path}: {e}")
-            return None
-    
+            logger.error(f"Failed to download files: {e}")
+            return []
+
     def get_copyright_script(self):
-        """Get path to the local copyright validation script"""
-        script_path = '/app/copyrightcheck.py'
-        
-        if not os.path.exists(script_path):
-            logger.error(f"Copyright script not found at {script_path}")
-            return None
-            
-        return script_path
-    
-    def validate_copyright(self):
-        """Run copyright validation and return results"""
+        """Download copyright validation script from pr-workflows repo"""
         try:
-            # Get configuration
-            logger.info("Getting configuration file...")
+            # Try to get script from pr-workflows repo
+            script_url = f"{GHES_URL}/api/v3/repos/marklogic-platform/pr-workflows/contents/scripts/copyrightcheck.py?ref=copyright"
+            logger.info(f"Getting copyright script from: {script_url}")
+            
+            response = requests.get(script_url, headers=self.headers, verify=VERIFY_SSL)
+            if response.status_code == 200:
+                script_data = response.json()
+                script_content = base64.b64decode(script_data['content']).decode('utf-8')
+                
+                # Save script to temp directory
+                script_path = os.path.join(self.temp_dir, 'copyrightcheck.py')
+                with open(script_path, 'w') as f:
+                    f.write(script_content)
+                    
+                logger.info(f"Copyright script saved to {script_path}")
+                return script_path
+            else:
+                logger.error(f"Failed to get copyright script: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get copyright script: {e}")
+            return None
+
+    def validate_copyright(self):
+        """Run copyright validation"""
+        try:
+            logger.info("Starting copyright validation...")
+            
+            # Get configuration file
             config_path, config_source = self.get_config_file()
             if not config_path:
-                return {
-                    'success': False,
-                    'error': 'No .copyrightconfig file found in PR head or base repository'
-                }
-            
-            # Get copyright script
-            logger.info("Getting copyright script...")
-            script_path = self.get_copyright_script()
-            if not script_path:
-                return {
-                    'success': False,
-                    'error': 'Copyright validation script not available'
-                }
+                return {'success': False, 'error': 'Copyright configuration file not found'}
             
             # Get changed files
-            logger.info("Getting changed files...")
             changed_files = self.get_changed_files()
             if not changed_files:
-                return {
-                    'success': True,
-                    'message': 'No files to validate',
-                    'files_checked': 0
-                }
+                return {'success': True, 'files_checked': 0, 'message': 'No files to validate'}
             
             # Download changed files
-            logger.info(f"Downloading {len(changed_files)} files...")
-            downloaded_files = []
-            for file_path in changed_files:
-                logger.info(f"Downloading file: {file_path}")
-                local_path = self.download_file_content(file_path)
-                if local_path:
-                    downloaded_files.append(local_path)
-            
+            downloaded_files = self.download_files(changed_files)
             if not downloaded_files:
-                return {
-                    'success': False,
-                    'error': 'No files could be downloaded for validation'
-                }
+                return {'success': False, 'error': 'Failed to download files for validation'}
+            
+            # Get copyright validation script
+            script_path = self.get_copyright_script()
+            if not script_path:
+                return {'success': False, 'error': 'Copyright validation script not found'}
             
             # Run copyright validation
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
-            try:
-                cmd = ['python3', script_path, '-c', config_path, '-v'] + downloaded_files
-                logger.info(f"Running command: {' '.join(cmd)}")
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=self.temp_dir
-                )
-                
-                logger.info(f"Command exit code: {result.returncode}")
-                if result.stdout:
-                    logger.info(f"Command stdout: {result.stdout}")
-                if result.stderr:
-                    logger.error(f"Command stderr: {result.stderr}")
-                
+            result = subprocess.run([
+                'python3', script_path,
+                '--config', config_path,
+                '--files'] + downloaded_files,
+                cwd=self.temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            logger.info(f"Copyright validation completed with exit code: {result.returncode}")
+            logger.info(f"Stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Stderr: {result.stderr}")
+            
+            if result.returncode == 0:
                 return {
-                    'success': result.returncode == 0,
-                    'exit_code': result.returncode,
-                    'stdout': result.stdout,
-                    'stderr': result.stderr,
+                    'success': True,
                     'files_checked': len(downloaded_files),
-                    'config_source': config_source
+                    'config_source': config_source,
+                    'output': result.stdout
                 }
-                
-            except Exception as e:
-                logger.error(f"Failed to run copyright validation subprocess: {str(e)}")
+            else:
                 return {
                     'success': False,
-                    'error': f'Failed to run copyright validation: {str(e)}'
+                    'files_checked': len(downloaded_files),
+                    'config_source': config_source,
+                    'error': result.stdout + result.stderr,
+                    'output': result.stdout
                 }
                 
+        except subprocess.TimeoutExpired:
+            logger.error("Copyright validation timed out")
+            return {'success': False, 'error': 'Validation timed out after 5 minutes'}
         except Exception as e:
-            logger.error(f"Exception in validate_copyright: {str(e)}", exc_info=True)
-            return {
-                'success': False,
-                'error': f'Validation error: {str(e)}'
-            }
+            logger.error(f"Copyright validation failed: {e}")
+            return {'success': False, 'error': str(e)}
 
-def get_installation_client(installation_id):
-    """Get GitHub client for a specific installation"""
-    try:
-        logger.info(f"Getting access token for installation ID: {installation_id}")
-        
-        # Debug: Check if integration object is valid
-        if integration is None:
-            logger.error("Integration object is None")
-            raise ValueError("GitHub Integration not initialized")
-        
-        logger.info(f"Integration object type: {type(integration)}")
-        logger.info(f"App ID: {APP_ID}, GHES URL: {GHES_URL}")
-        
-        # Debug: Check if private key is valid
-        if PRIVATE_KEY is None:
-            logger.error("Private key is None")
-            raise ValueError("Private key not set")
-            
-        logger.info(f"Private key length: {len(PRIVATE_KEY) if PRIVATE_KEY else 'None'}")
-        
-        # Debug: Test if we can make a basic API call first
-        try:
-            logger.info("Testing basic API access by getting app info...")
-            app_info = integration.get_app()
-            logger.info(f"App info retrieved: {app_info.name} (ID: {app_info.id})")
-        except Exception as e:
-            logger.error(f"Failed to get app info: {e}")
-            raise ValueError(f"Cannot access GitHub API: {e}")
-        
-        # Debug: List all installations first
-        try:
-            logger.info("Getting list of installations...")
-            installations = integration.get_installations()
-            install_list = [(install.id, install.account.login) for install in installations]
-            logger.info(f"Available installations: {install_list}")
-            
-            # Check if our installation ID is in the list
-            install_ids = [install.id for install in installations]
-            if installation_id not in install_ids:
-                logger.error(f"Installation ID {installation_id} not found in available installations: {install_ids}")
-                raise ValueError(f"Installation {installation_id} not accessible")
-                
-        except Exception as e:
-            logger.error(f"Failed to get installations: {e}")
-            # Continue anyway, maybe it's a permission issue with listing
-        
-        # Try to get access token
-        logger.info(f"Calling integration.get_access_token({installation_id})...")
-        access_token = integration.get_access_token(installation_id)
-        logger.info("Access token obtained successfully")
-        
-        if access_token is None:
-            logger.error("Access token is None")
-            raise ValueError("Failed to get access token")
-            
-        logger.info(f"Access token type: {type(access_token)}")
-        
-        # Create GitHub client
-        base_url = f"{GHES_URL}/api/v3"
-        logger.info(f"Creating GitHub client with base URL: {base_url}")
-        github_client = Github(access_token.token, base_url=base_url)
-        logger.info("GitHub client created successfully")
-        return github_client
-        
-    except Exception as e:
-        logger.error(f"Failed to get GitHub client for installation {installation_id}: {str(e)}", exc_info=True)
-        raise
-
-def create_status_check(github_client, repo_full_name, commit_sha, state, description, details_url=None):
-    """Create a status check on the commit using direct API call for GHES compatibility"""
+def create_status_check(access_token, repo_full_name, commit_sha, state, description, details_url=None):
+    """Create a status check on the commit using direct API call"""
     try:
         logger.info(f"Creating status check for {repo_full_name}@{commit_sha}: {state} - {description}")
-        
-        # Use direct API call instead of PyGithub method for GHES compatibility
-        import requests
-        
-        # Get the access token from the github client
-        # The github_client has an internal requester with the token
-        token = github_client._Github__requester._Requester__authorizationHeader.split()[-1]
         
         # Construct the API URL
         api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/statuses/{commit_sha}"
         
         headers = {
-            'Authorization': f'token {token}',
+            'Authorization': f'token {access_token}',
             'Accept': 'application/vnd.github.v3+json',
             'Content-Type': 'application/json'
         }
@@ -428,26 +445,26 @@ def webhook():
         try:
             pr_data = payload['pull_request']
             repo_full_name = payload['repository']['full_name']
-            installation_id = payload['installation']['id']
             pr_number = pr_data['number']
             commit_sha = pr_data['head']['sha']
+            installation_id = payload['installation']['id']
         except KeyError as e:
             logger.error(f"Missing required field in webhook payload: {e}")
             return jsonify({'error': f'Missing field: {e}'}), 400
         
         logger.info(f"Processing PR #{pr_number} in {repo_full_name}")
         
-        # Get GitHub client for this installation
+        # Get access token for this installation
         try:
-            github_client = get_installation_client(installation_id)
+            access_token = get_installation_access_token(installation_id)
         except Exception as e:
-            logger.error(f"Failed to get GitHub client: {e}")
+            logger.error(f"Failed to get access token: {e}")
             return jsonify({'error': 'Authentication failed'}), 500
         
         # Create pending status
         try:
             create_status_check(
-                github_client,
+                access_token,
                 repo_full_name,
                 commit_sha,
                 'pending',
@@ -459,14 +476,14 @@ def webhook():
         
         # Run copyright validation
         try:
-            with CopyrightValidator(github_client, repo_full_name, pr_number) as validator:
+            with CopyrightValidator(access_token, repo_full_name, pr_number) as validator:
                 result = validator.validate_copyright()
         except Exception as e:
             logger.error(f"Copyright validation failed: {e}")
             # Try to create failure status
             try:
                 create_status_check(
-                    github_client,
+                    access_token,
                     repo_full_name,
                     commit_sha,
                     'error',
@@ -479,7 +496,7 @@ def webhook():
         # Create status check based on results
         if result['success']:
             create_status_check(
-                github_client,
+                access_token,
                 repo_full_name,
                 commit_sha,
                 'success',
@@ -487,7 +504,7 @@ def webhook():
             )
         else:
             create_status_check(
-                github_client,
+                access_token,
                 repo_full_name,
                 commit_sha,
                 'failure',
@@ -509,13 +526,9 @@ def health():
 
 @app.route('/debug/integration', methods=['GET'])
 def debug_integration():
-    """Debug endpoint to test GitHub integration"""
+    """Debug endpoint to test GitHub integration using direct API calls"""
     try:
-        logger.info("Debug: Testing GitHub integration...")
-        
-        # Check if integration was created successfully
-        if not integration:
-            return jsonify({'error': 'GitHub Integration not initialized'}), 500
+        logger.info("Debug: Testing GitHub integration with direct API calls...")
         
         # Check environment variables
         debug_info = {
@@ -524,156 +537,79 @@ def debug_integration():
             'private_key_length': len(PRIVATE_KEY) if PRIVATE_KEY else 0,
             'private_key_starts_with': PRIVATE_KEY[:50] if PRIVATE_KEY else None,
             'ghes_url': GHES_URL,
-            'integration_type': str(type(integration)),
+            'using_direct_api': True,
         }
         
-        logger.info(f"Debug info: {debug_info}")
-        
-        # Skip get_app() due to PyGithub/GHES compatibility issue
-        # The error is in PyGithub's GithubApp.py line 145 - it expects attributes dict but gets None
-        debug_info['app_test'] = 'skipped_due_to_pygithub_ghes_incompatibility'
-        debug_info['app_note'] = 'get_app() fails due to PyGithub expecting attributes dict but GHES returns None'
-            
-        # Test getting installations with better error handling
+        # Test JWT token creation
         try:
-            logger.info("Getting installations...")
-            installations = integration.get_installations()
-            logger.info(f"Installations type: {type(installations)}")
-            
-            if installations is None:
-                debug_info['installations_error'] = 'get_installations() returned None'
-                debug_info['installations'] = []
-                debug_info['installation_count'] = 0
+            jwt_token = create_jwt_token()
+            if jwt_token:
+                debug_info['jwt_test'] = 'success'
+                debug_info['jwt_length'] = len(jwt_token)
             else:
+                debug_info['jwt_test'] = 'failed'
+        except Exception as e:
+            debug_info['jwt_error'] = str(e)
+            return jsonify(debug_info), 500
+        
+        # Test app info endpoint
+        try:
+            headers = {
+                'Authorization': f'Bearer {jwt_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            app_url = f"{GHES_URL}/api/v3/app"
+            response = requests.get(app_url, headers=headers, verify=VERIFY_SSL)
+            
+            if response.status_code == 200:
+                app_data = response.json()
+                debug_info['app_test'] = 'success'
+                debug_info['app_name'] = app_data.get('name')
+                debug_info['app_installations_count'] = app_data.get('installations_count', 0)
+            else:
+                debug_info['app_error'] = f"HTTP {response.status_code}: {response.text[:200]}"
+                
+        except Exception as e:
+            debug_info['app_error'] = str(e)
+        
+        # Test installations endpoint
+        try:
+            install_url = f"{GHES_URL}/api/v3/app/installations"
+            response = requests.get(install_url, headers=headers, verify=VERIFY_SSL)
+            
+            if response.status_code == 200:
+                installations = response.json()
+                debug_info['installations_test'] = 'success'
+                debug_info['installation_count'] = len(installations)
+                
                 install_list = []
-                try:
-                    # Try to iterate over installations
-                    installation_objects = list(installations)  # Convert PaginatedList to list
-                    logger.info(f"Found {len(installation_objects)} installation objects")
-                    
-                    for i, install in enumerate(installation_objects):
-                        logger.info(f"Processing installation {i}: {install}")
-                        install_id = getattr(install, 'id', None)
-                        
-                        # Handle account safely
-                        account = getattr(install, 'account', None)
-                        if account:
-                            account_login = getattr(account, 'login', None)
-                        else:
-                            account_login = None
-                            
-                        if install_id:
-                            install_list.append((install_id, account_login))
-                            logger.info(f"Added installation: {install_id}, {account_login}")
-                        else:
-                            logger.warning(f"Installation {i} has no ID: {install}")
-                            
-                    debug_info['installations'] = install_list
-                    debug_info['installation_count'] = len(install_list)
-                    debug_info['raw_installation_count'] = len(installation_objects)
-                    
-                except TypeError as te:
-                    debug_info['installations_error'] = f'TypeError iterating installations: {te}'
-                    debug_info['installations'] = []
-                    debug_info['installation_count'] = 0
-                except Exception as iter_e:
-                    debug_info['installations_error'] = f'Error iterating: {iter_e}'
-                    debug_info['installations'] = []
-                    debug_info['installation_count'] = 0
-                    
+                for install in installations:
+                    install_id = install.get('id')
+                    account_login = install.get('account', {}).get('login') if install.get('account') else None
+                    install_list.append((install_id, account_login))
+                
+                debug_info['installations'] = install_list
+            else:
+                debug_info['installations_error'] = f"HTTP {response.status_code}: {response.text[:200]}"
+                
         except Exception as e:
             debug_info['installations_error'] = str(e)
-            logger.error(f"Installations error: {e}", exc_info=True)
-            
-        # Test with a sample installation ID (if provided)
+        
+        # Test installation access token (if installation ID provided)
         installation_id = request.args.get('installation_id')
         if installation_id:
             try:
                 installation_id = int(installation_id)
                 debug_info['testing_installation'] = installation_id
                 
-                # Check if this installation is in our list
-                if 'installations' in debug_info:
-                    install_ids = [install[0] for install in debug_info['installations']]
-                    debug_info['installation_in_list'] = installation_id in install_ids
-                
-                access_token = integration.get_access_token(installation_id)
+                access_token = get_installation_access_token(installation_id)
                 debug_info['token_test'] = 'success'
-                debug_info['token_length'] = len(access_token.token)
+                debug_info['token_length'] = len(access_token)
+                
             except Exception as e:
                 debug_info['token_error'] = str(e)
         
-        # Manual JWT test with different headers for GHES compatibility
-        try:
-            import jwt
-            import time
-            
-            logger.info("Testing manual JWT authentication...")
-            payload = {
-                'iat': int(time.time()),
-                'exp': int(time.time()) + 600,
-                'iss': APP_ID
-            }
-            token = jwt.encode(payload, PRIVATE_KEY, algorithm='RS256')
-            
-            # Try different Accept headers for GHES compatibility (including curl format)
-            headers_variants = [
-                {'Authorization': f'Bearer {token}', 'Accept': '*/*', 'User-Agent': 'curl/7.88.1'},  # Exact curl format
-                {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github.v3+json'},
-                {'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
-                {'Authorization': f'Bearer {token}'},  # No Accept header
-                {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'},
-            ]
-            
-            for i, headers in enumerate(headers_variants):
-                try:
-                    # Test app endpoint
-                    app_url = f'{GHES_URL}/api/v3/app'
-                    logger.info(f"Testing app URL: {app_url}")
-                    app_response = requests.get(app_url, headers=headers, verify=VERIFY_SSL)
-                    debug_info[f'manual_app_status_{i}'] = app_response.status_code
-                    debug_info[f'manual_app_url_{i}'] = app_url  # Show the actual URL
-                    if app_response.status_code == 200:
-                        # Check if response is JSON
-                        try:
-                            app_data = app_response.json()
-                            debug_info[f'manual_app_response_{i}'] = str(app_data)[:200]
-                            debug_info['working_accept_header'] = headers.get('Accept', 'none')
-                            break
-                        except:
-                            debug_info[f'manual_app_response_{i}'] = app_response.text[:200]
-                    else:
-                        debug_info[f'manual_app_error_{i}'] = app_response.text[:100] if app_response.text else 'No response text'
-                except Exception as e:
-                    debug_info[f'manual_app_exception_{i}'] = str(e)
-            
-            # Test installations with working header (if found) or default
-            working_headers = headers_variants[0]  # Default to first
-            if 'working_accept_header' in debug_info:
-                working_headers = {'Authorization': f'Bearer {token}', 'Accept': debug_info['working_accept_header']}
-            
-            install_url = f'{GHES_URL}/api/v3/app/installations'
-            logger.info(f"Testing installations URL: {install_url}")
-            debug_info['manual_install_url'] = install_url
-            install_response = requests.get(install_url, headers=working_headers, verify=VERIFY_SSL)
-            debug_info['manual_install_status'] = install_response.status_code
-            if install_response.status_code == 200:
-                try:
-                    install_data = install_response.json()
-                    debug_info['manual_install_response'] = str(install_data)[:500]
-                    if isinstance(install_data, list):
-                        debug_info['manual_install_count'] = len(install_data)
-                        if install_data:
-                            debug_info['manual_install_first'] = str(install_data[0])
-                except:
-                    debug_info['manual_install_response'] = install_response.text[:500]
-            else:
-                debug_info['manual_install_error'] = install_response.text[:200] if install_response.text else 'No response text'
-            
-        except Exception as e:
-            debug_info['manual_jwt_error'] = str(e)
-            logger.error(f"Manual JWT error: {e}", exc_info=True)
-
         return jsonify(debug_info), 200
         
     except Exception as e:
