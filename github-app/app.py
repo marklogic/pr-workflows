@@ -31,6 +31,12 @@ PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
 WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET')
 GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com').rstrip('/')  # Remove trailing slash
 
+# Script repository configuration (defaults to GitHub.com)
+SCRIPT_REPO_URL = os.environ.get('SCRIPT_REPO_URL', 'https://api.github.com')
+SCRIPT_REPO_OWNER = os.environ.get('SCRIPT_REPO_OWNER', 'marklogic')
+SCRIPT_REPO_NAME = os.environ.get('SCRIPT_REPO_NAME', 'pr-workflows')
+SCRIPT_BRANCH = os.environ.get('SCRIPT_BRANCH', 'copyright')
+
 # GHES-specific options
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'true').lower() == 'true'
 
@@ -291,11 +297,17 @@ class CopyrightValidator:
     def get_copyright_script(self):
         """Download copyright validation script from pr-workflows repo"""
         try:
-            # Try to get script from pr-workflows repo
-            script_url = f"{GHES_URL}/api/v3/repos/marklogic-platform/pr-workflows/contents/scripts/copyrightcheck.py?ref=copyright"
+            # Get script from configured repository (defaults to GitHub.com)
+            script_url = f"{SCRIPT_REPO_URL}/repos/{SCRIPT_REPO_OWNER}/{SCRIPT_REPO_NAME}/contents/scripts/copyrightcheck.py?ref={SCRIPT_BRANCH}"
             logger.info(f"Getting copyright script from: {script_url}")
             
-            response = requests.get(script_url, headers=self.headers, verify=VERIFY_SSL)
+            # For GitHub.com, try without authentication first (public repo)
+            if SCRIPT_REPO_URL == 'https://api.github.com':
+                response = requests.get(script_url, verify=True)
+            else:
+                # For other instances, use authentication
+                response = requests.get(script_url, headers=self.headers, verify=VERIFY_SSL)
+                
             if response.status_code == 200:
                 script_data = response.json()
                 script_content = base64.b64decode(script_data['content']).decode('utf-8')
