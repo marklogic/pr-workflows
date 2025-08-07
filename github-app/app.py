@@ -124,6 +124,8 @@ class CopyrightValidator:
             self.pr_number = pr_number
             self.temp_dir = None
             self.diff_applied = False  # Track whether PR diff was applied successfully
+            self.files_from_diff = []  # Track files successfully applied from diff
+            self.files_from_base = []  # Track files taken from base repository
             
             # API headers
             self.headers = {
@@ -299,17 +301,27 @@ class CopyrightValidator:
                 'git', 'apply', '--ignore-whitespace', '--reject', diff_path
             ], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
             
-            # Track whether diff was applied successfully
-            self.diff_applied = apply_result.returncode == 0
+            # Check if any files were successfully applied
+            stderr_output = apply_result.stderr.lower()
+            applied_cleanly_count = stderr_output.count('applied patch') + stderr_output.count('cleanly')
             
-            if not self.diff_applied:
-                logger.warning(f"Could not apply PR diff: {apply_result.stderr}")
-                logger.info("Validating copyright on base repository files only")
+            # Consider it successful if some files were applied, even with warnings
+            self.diff_applied = apply_result.returncode == 0 or applied_cleanly_count > 0
+            
+            if apply_result.returncode != 0:
+                if applied_cleanly_count > 0:
+                    logger.info(f"PR diff partially applied ({applied_cleanly_count} files applied cleanly)")
+                    logger.warning(f"Some conflicts occurred: {apply_result.stderr}")
+                else:
+                    logger.warning(f"Could not apply PR diff: {apply_result.stderr}")
+                    logger.info("Validating copyright on base repository files only")
             else:
                 logger.info("PR diff applied successfully")
             
             # Copy the files we need to our working directory
             downloaded_files = []
+            diff_content = diff_response.text
+            
             for file_path in file_paths:
                 source_path = os.path.join(base_clone_dir, file_path)
                 dest_path = os.path.join(self.temp_dir, file_path)
@@ -320,11 +332,23 @@ class CopyrightValidator:
                 if os.path.exists(source_path):
                     shutil.copy2(source_path, dest_path)
                     downloaded_files.append(dest_path)
-                    logger.info(f"Copied file: {file_path}")
+                    
+                    # Determine if this file was in the diff and successfully applied
+                    file_in_diff = f"--- a/{file_path}" in diff_content or f"+++ b/{file_path}" in diff_content
+                    successfully_applied = f"Applied patch {file_path} cleanly" in apply_result.stderr
+                    
+                    if file_in_diff and (apply_result.returncode == 0 or successfully_applied):
+                        self.files_from_diff.append(file_path)
+                        logger.info(f"Copied file from diff: {file_path}")
+                    else:
+                        self.files_from_base.append(file_path)
+                        logger.info(f"Copied file from base: {file_path}")
                 else:
                     logger.warning(f"File not found: {file_path}")
             
-            status = "with PR changes" if self.diff_applied else "base files only"
+            status = f"with PR changes ({len(self.files_from_diff)} files)" if self.diff_applied else "base files only"
+            if self.files_from_diff and self.files_from_base:
+                status = f"mixed: {len(self.files_from_diff)} from diff, {len(self.files_from_base)} from base"
             logger.info(f"Successfully processed {len(downloaded_files)} files ({status})")
             return downloaded_files
             
@@ -580,17 +604,41 @@ def update_pr_comment(access_token, repo_full_name, comment_id, comment_body):
         logger.error(f"Failed to update PR comment: {e}")
         return None
 
-def format_validation_comment(result, commit_sha, diff_applied=True):
+def format_validation_comment(result, commit_sha, files_from_diff=None, files_from_base=None):
     """Format validation results into a GitHub markdown comment"""
     # Add timestamp and commit info for tracking
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
     commit_short = commit_sha[:7]
     
-    # Add diff status info
+    # Initialize file lists if not provided
+    files_from_diff = files_from_diff or []
+    files_from_base = files_from_base or []
+    
+    # Determine status from file lists
+    has_diff_files = len(files_from_diff) > 0
+    has_base_files = len(files_from_base) > 0
+    
+    # Add diff status info with file breakdown
     diff_status = ""
-    if not diff_applied:
+    if not has_diff_files and has_base_files:
+        # All files from base (complete diff failure)
         diff_status = "\n⚠️ **Note:** Could not apply PR diff - validation performed on base repository files only.\n"
+    elif has_diff_files and has_base_files:
+        # Mixed sources (partial diff success)
+        diff_status = f"\n⚠️ **Note:** PR diff partially applied - some files validated from base repository.\n"
+    
+    # Add file source breakdown
+    if has_diff_files and has_base_files:
+        diff_status += f"""
+**File Sources:**
+- ✅ **From PR changes** ({len(files_from_diff)} files): {', '.join(f'`{f}`' for f in files_from_diff)}
+- ⚠️ **From base repository** ({len(files_from_base)} files): {', '.join(f'`{f}`' for f in files_from_base)}
+"""
+    elif has_diff_files:
+        diff_status += f"\n📝 **All {len(files_from_diff)} files validated from PR changes**\n"
+    elif has_base_files:
+        diff_status += f"\n⚠️ **All {len(files_from_base)} files validated from base repository**\n"
     
     if result['success']:
         # Success comment
@@ -755,7 +803,7 @@ def webhook():
         
         # Create PR comment with detailed results
         try:
-            comment_body = format_validation_comment(result, commit_sha, validator.diff_applied)
+            comment_body = format_validation_comment(result, commit_sha, validator.files_from_diff, validator.files_from_base)
             existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
             
             if existing_comment_id:
