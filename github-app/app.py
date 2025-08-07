@@ -262,7 +262,7 @@ class CopyrightValidator:
             # Try to apply the diff
             logger.info("Attempting to apply PR diff to base repository")
             apply_result = subprocess.run([
-                'git', 'apply', '--ignore-whitespace', '--reject', diff_path
+                'git', 'apply', '--3way', '--ignore-whitespace', diff_path
             ], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
             
             # Check if any files were successfully applied
