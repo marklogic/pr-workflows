@@ -400,7 +400,7 @@ class CopyrightValidator:
                     'success': True,
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
-                    'output': result.stdout
+                    'output': clean_validation_output(result.stdout, self.temp_dir)
                 }
             else:
                 return {
@@ -408,7 +408,7 @@ class CopyrightValidator:
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
                     'error': result.stdout + result.stderr,
-                    'output': result.stdout
+                    'output': clean_validation_output(result.stdout, self.temp_dir)
                 }
                 
         except subprocess.TimeoutExpired:
@@ -417,6 +417,20 @@ class CopyrightValidator:
         except Exception as e:
             logger.error(f"Copyright validation failed: {e}")
             return {'success': False, 'error': str(e)}
+
+def clean_validation_output(output, temp_dir):
+    """Clean temporary directory paths from validation output for PR comment"""
+    if not output or not temp_dir:
+        return output
+    
+    # Replace temp directory path with just the relative file paths
+    cleaned_output = output.replace(temp_dir + '/', '')
+    
+    # Also handle cases where temp_dir doesn't end with /
+    if not temp_dir.endswith('/'):
+        cleaned_output = cleaned_output.replace(temp_dir, '')
+    
+    return cleaned_output
 
 def create_status_check(access_token, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit using direct API call"""
