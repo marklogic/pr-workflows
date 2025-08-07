@@ -161,25 +161,22 @@ class CopyrightValidator:
     def get_config_file(self):
         """Get .copyrightconfig from the cloned base repo (after diff is applied)"""
         try:
-            # Check if config exists in the base repo clone (after diff application)
+            # The config file is already in the cloned repo with diff applied
             base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
-            config_source_path = os.path.join(base_clone_dir, '.copyrightconfig')
-            config_dest_path = os.path.join(self.temp_dir, '.copyrightconfig')
+            config_path = os.path.join(base_clone_dir, '.copyrightconfig')
             
-            if os.path.exists(config_source_path):
-                # Copy config file to temp directory for validation script
-                shutil.copy2(config_source_path, config_dest_path)
-                
+            if os.path.exists(config_path):
                 # Determine source based on whether .copyrightconfig was in the diff
-                if '.copyrightconfig' in [f for f in self.files_from_diff]:
+                if '.copyrightconfig' in self.files_from_diff:
                     config_source = "PR changes"
+                    logger.info("📝 Using .copyrightconfig from PR changes (modified by this PR)")
                 else:
                     config_source = "base repository"
+                    logger.info("📄 Using .copyrightconfig from base repository (unchanged by this PR)")
                 
-                logger.info(f"Config file found and copied from {config_source}")
-                return config_dest_path, config_source
+                return config_path, config_source
             else:
-                logger.warning("No .copyrightconfig found in repository")
+                logger.warning("❌ No .copyrightconfig found in repository")
                 return None, None
                 
         except Exception as e:
