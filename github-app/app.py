@@ -721,14 +721,9 @@ def format_validation_comment(result, commit_sha, files_from_diff=None, files_fr
 
 **Commit:** `{commit_short}` | **Time:** {timestamp}
 
-<details>
-<summary>Validation Details</summary>
+### Validation Results
 
-```
 {result.get('output', 'No detailed output available.')}
-```
-
-</details>
 
 <!-- copyright-validation-result: {commit_sha} -->
 """
@@ -753,14 +748,9 @@ def format_validation_comment(result, commit_sha, files_from_diff=None, files_fr
 
 **Commit:** `{commit_short}` | **Time:** {timestamp}
 
-<details>
-<summary>Validation Results</summary>
+### Validation Results
 
-```
 {output}
-```
-
-</details>
 
 ### 🔧 How to Fix
 
