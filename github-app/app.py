@@ -159,68 +159,32 @@ class CopyrightValidator:
             shutil.rmtree(self.temp_dir)
     
     def get_config_file(self):
-        """Get .copyrightconfig from PR head or base repo using direct API calls"""
-        config_content = None
-        config_source = None
-        
+        """Get .copyrightconfig from the cloned base repo (after diff is applied)"""
         try:
-            logger.info("Attempting to get config from PR head...")
-            # Try to get config from PR head first
-            head_repo_name = self.pr_data['head']['repo']['full_name']
-            head_sha = self.pr_data['head']['sha']
+            # Check if config exists in the base repo clone (after diff application)
+            base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
+            config_source_path = os.path.join(base_clone_dir, '.copyrightconfig')
+            config_dest_path = os.path.join(self.temp_dir, '.copyrightconfig')
             
-            config_url = f"{GHES_URL}/api/v3/repos/{head_repo_name}/contents/.copyrightconfig?ref={head_sha}"
-            logger.info(f"Getting config from: {config_url}")
-            
-            response = requests.get(config_url, headers=self.headers, verify=VERIFY_SSL)
-            if response.status_code == 200:
-                config_data = response.json()
-                config_content = base64.b64decode(config_data['content']).decode('utf-8')
-                config_source = "PR head"
-                logger.info(f"Found .copyrightconfig in PR head")
-            else:
-                raise Exception(f"Config not found in PR head: {response.status_code}")
+            if os.path.exists(config_source_path):
+                # Copy config file to temp directory for validation script
+                shutil.copy2(config_source_path, config_dest_path)
                 
-        except Exception as e:
-            logger.info(f"Config not found in PR head: {e}")
-            
-            try:
-                logger.info("Attempting to get config from base repository...")
-                # Fallback to base repo
-                base_repo_name = self.pr_data['base']['repo']['full_name']
-                base_ref = self.pr_data['base']['ref']
-                
-                config_url = f"{GHES_URL}/api/v3/repos/{base_repo_name}/contents/.copyrightconfig?ref={base_ref}"
-                logger.info(f"Getting config from: {config_url}")
-                
-                response = requests.get(config_url, headers=self.headers, verify=VERIFY_SSL)
-                if response.status_code == 200:
-                    config_data = response.json()
-                    config_content = base64.b64decode(config_data['content']).decode('utf-8')
-                    config_source = "base repository"
-                    logger.info(f"Found .copyrightconfig in base repository")
+                # Determine source based on whether .copyrightconfig was in the diff
+                if '.copyrightconfig' in [f for f in self.files_from_diff]:
+                    config_source = "PR changes"
                 else:
-                    raise Exception(f"Config not found in base repo: {response.status_code}")
-                    
-            except Exception as e:
-                logger.error(f"Config not found in base repo either: {e}")
+                    config_source = "base repository"
+                
+                logger.info(f"Config file found and copied from {config_source}")
+                return config_dest_path, config_source
+            else:
+                logger.warning("No .copyrightconfig found in repository")
                 return None, None
-        
-        if config_content is None:
-            logger.error("Config content is None after processing")
-            return None, None
-            
-        # Save config to temp file
-        config_path = os.path.join(self.temp_dir, '.copyrightconfig')
-        try:
-            with open(config_path, 'w') as f:
-                f.write(config_content)
+                
         except Exception as e:
-            logger.error(f"Failed to write config file: {e}")
+            logger.error(f"Failed to get config file: {e}")
             return None, None
-            
-        logger.info(f"Config file saved to {config_path} (source: {config_source})")
-        return config_path, config_source
 
     def get_changed_files(self):
         """Get list of changed files from PR using direct API call"""
@@ -394,20 +358,20 @@ class CopyrightValidator:
         try:
             logger.info("Starting copyright validation...")
             
-            # Get configuration file
-            config_path, config_source = self.get_config_file()
-            if not config_path:
-                return {'success': False, 'error': 'Copyright configuration file not found'}
-            
-            # Get changed files
+            # Get changed files first
             changed_files = self.get_changed_files()
             if not changed_files:
                 return {'success': True, 'files_checked': 0, 'message': 'No files to validate'}
             
-            # Download changed files
+            # Download changed files (this clones base repo and applies diff)
             downloaded_files = self.download_files(changed_files)
             if not downloaded_files:
                 return {'success': False, 'error': 'Failed to download files for validation'}
+            
+            # Get configuration file from the cloned repo (after diff is applied)
+            config_path, config_source = self.get_config_file()
+            if not config_path:
+                return {'success': False, 'error': 'Copyright configuration file not found'}
             
             # Get copyright validation script
             script_path = self.get_copyright_script()
