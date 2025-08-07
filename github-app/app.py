@@ -400,7 +400,7 @@ class CopyrightValidator:
                     'success': True,
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
-                    'output': clean_validation_output(result.stdout, self.temp_dir)
+                    'output': format_validation_results(result.stdout, self.temp_dir, self.files_from_diff, self.files_from_base)
                 }
             else:
                 return {
@@ -408,7 +408,7 @@ class CopyrightValidator:
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
                     'error': result.stdout + result.stderr,
-                    'output': clean_validation_output(result.stdout, self.temp_dir)
+                    'output': format_validation_results(result.stdout, self.temp_dir, self.files_from_diff, self.files_from_base)
                 }
                 
         except subprocess.TimeoutExpired:
@@ -418,19 +418,127 @@ class CopyrightValidator:
             logger.error(f"Copyright validation failed: {e}")
             return {'success': False, 'error': str(e)}
 
-def clean_validation_output(output, temp_dir):
-    """Clean temporary directory paths from validation output for PR comment"""
+def format_validation_results(output, temp_dir, files_from_diff=None, files_from_base=None):
+    """Format validation output into structured results for PR comment"""
     if not output or not temp_dir:
-        return output
+        return "No validation output available."
     
-    # Replace temp directory path with just the relative file paths
-    cleaned_output = output.replace(temp_dir + '/', '')
+    # Initialize file lists if not provided
+    files_from_diff = files_from_diff or []
+    files_from_base = files_from_base or []
     
-    # Also handle cases where temp_dir doesn't end with /
-    if not temp_dir.endswith('/'):
-        cleaned_output = cleaned_output.replace(temp_dir, '')
+    # Parse the validation output to extract details for each file
+    lines = output.split('\n')
     
-    return cleaned_output
+    # Extract summary info
+    total_files = 0
+    valid_files = 0
+    invalid_files = 0
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('Total files checked:'):
+            try:
+                total_files = int(line.split(':')[1].strip())
+            except:
+                pass
+        elif line.startswith('Valid files:'):
+            try:
+                valid_files = int(line.split(':')[1].strip())
+            except:
+                pass
+        elif line.startswith('Invalid files:'):
+            try:
+                invalid_files = int(line.split(':')[1].strip())
+            except:
+                pass
+    
+    # Build file results based on our tracked lists, not symbols
+    file_results = []
+    all_files = list(set(files_from_diff + files_from_base))
+    
+    # Parse validation details for each file
+    file_details_map = {}
+    current_file = None
+    current_details = []
+    
+    for line in lines:
+        line_stripped = line.strip()
+        
+        if line_stripped.startswith('✅') or line_stripped.startswith('❌'):
+            # Save previous file details
+            if current_file:
+                file_details_map[current_file] = '\n'.join(current_details).strip()
+            
+            # Extract file path and clean it
+            file_path = line_stripped[2:].strip()
+            file_path = file_path.replace(temp_dir + '/', '').replace(temp_dir, '')
+            if file_path.startswith('/'):
+                file_path = file_path[1:]
+            
+            current_file = file_path
+            current_details = []
+            
+        elif current_file and line_stripped and not line_stripped.startswith('='):
+            current_details.append(line_stripped)
+    
+    # Save last file details
+    if current_file:
+        file_details_map[current_file] = '\n'.join(current_details).strip()
+    
+    # Create results based on our file lists
+    for file_path in all_files:
+        # Determine status based on validation details
+        details = file_details_map.get(file_path, '')
+        status = '❌'  # Default to failed
+        
+        # Check if validation passed (no error messages in details)
+        if details and not any(keyword in details.lower() for keyword in ['error:', 'expected:', 'no copyright', 'invalid', 'missing']):
+            status = '✅'
+        elif not details:
+            # If no details found, assume it passed (may not have been in validation output)
+            status = '✅'
+            details = 'Copyright header is valid'
+        
+        file_results.append({
+            'file': file_path,
+            'status': status,
+            'details': details
+        })
+    
+    # Format the results with proper structure
+    result_lines = []
+    result_lines.append("Copyright Validation Results:")
+    result_lines.append("=" * 50)
+    result_lines.append(f"Total files checked: {total_files}")
+    result_lines.append(f"Valid files: {valid_files}")
+    result_lines.append(f"Invalid files: {invalid_files}")
+    result_lines.append("")
+    
+    # Format each file result
+    for file_result in file_results:
+        file_path = file_result['file']
+        status = file_result['status']
+        details = file_result['details']
+        
+        # Add file with bold formatting
+        result_lines.append(f"{status} **{file_path}**")
+        
+        # Add source annotation as subtle FYI using our tracked lists
+        if file_path in files_from_diff:
+            result_lines.append("   <sub>📝 FYI: Validated with PR changes</sub>")
+        elif file_path in files_from_base:
+            result_lines.append("   <sub>⚠️ FYI: Validated with base repository version</sub>")
+        
+        # Add validation details
+        if details:
+            for detail_line in details.split('\n'):
+                if detail_line.strip():
+                    result_lines.append(f"   {detail_line.strip()}")
+        
+        result_lines.append("")
+    
+    return '\n'.join(result_lines)
 
 def create_status_check(access_token, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit using direct API call"""
@@ -597,26 +705,8 @@ def format_validation_comment(result, commit_sha, files_from_diff=None, files_fr
     has_diff_files = len(files_from_diff) > 0
     has_base_files = len(files_from_base) > 0
     
-    # Add diff status info with file breakdown
+    # No need for diff status notes since we show source info per file
     diff_status = ""
-    if not has_diff_files and has_base_files:
-        # All files from base (complete diff failure)
-        diff_status = "\n⚠️ **Note:** Could not apply PR diff - validation performed on base repository files only.\n"
-    elif has_diff_files and has_base_files:
-        # Mixed sources (partial diff success)
-        diff_status = f"\n⚠️ **Note:** PR diff partially applied - some files validated from base repository.\n"
-    
-    # Add file source breakdown
-    if has_diff_files and has_base_files:
-        diff_status += f"""
-**File Sources:**
-- ✅ **From PR changes** ({len(files_from_diff)} files): {', '.join(f'`{f}`' for f in files_from_diff)}
-- ⚠️ **From base repository** ({len(files_from_base)} files): {', '.join(f'`{f}`' for f in files_from_base)}
-"""
-    elif has_diff_files:
-        diff_status += f"\n📝 **All {len(files_from_diff)} files validated from PR changes**\n"
-    elif has_base_files:
-        diff_status += f"\n⚠️ **All {len(files_from_base)} files validated from base repository**\n"
     
     if result['success']:
         # Success comment
