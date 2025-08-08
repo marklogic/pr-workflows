@@ -490,7 +490,7 @@ class CopyrightValidator:
                     'success': True,
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
-                    'output': format_validation_results(result.stdout, self.temp_dir, self.files_from_diff, self.files_from_base)
+                    'output': result.stdout
                 }
             else:
                 return {
@@ -498,7 +498,7 @@ class CopyrightValidator:
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
                     'error': result.stdout + result.stderr,
-                    'output': format_validation_results(result.stdout, self.temp_dir, self.files_from_diff, self.files_from_base)
+                    'output': result.stdout
                 }
                 
         except subprocess.TimeoutExpired:
@@ -507,128 +507,6 @@ class CopyrightValidator:
         except Exception as e:
             logger.error(f"Copyright validation failed: {e}")
             return {'success': False, 'error': str(e)}
-
-def format_validation_results(output, temp_dir, files_from_diff=None, files_from_base=None):
-    """Format validation output into structured results for PR comment"""
-    if not output or not temp_dir:
-        return "No validation output available."
-    
-    # Initialize file lists if not provided
-    files_from_diff = files_from_diff or []
-    files_from_base = files_from_base or []
-    
-    # Parse the validation output to extract details for each file
-    lines = output.split('\n')
-    
-    # Extract summary info
-    total_files = 0
-    valid_files = 0
-    invalid_files = 0
-    
-    for line in lines:
-        line = line.strip()
-        if line.startswith('Total files checked:'):
-            try:
-                total_files = int(line.split(':')[1].strip())
-            except:
-                pass
-        elif line.startswith('Valid files:'):
-            try:
-                valid_files = int(line.split(':')[1].strip())
-            except:
-                pass
-        elif line.startswith('Invalid files:'):
-            try:
-                invalid_files = int(line.split(':')[1].strip())
-            except:
-                pass
-    
-    # Build file results based on our tracked lists, not symbols
-    file_results = []
-    all_files = list(set(files_from_diff + files_from_base))
-    
-    # Parse validation details for each file
-    file_details_map = {}
-    current_file = None
-    current_details = []
-    
-    for line in lines:
-        line_stripped = line.strip()
-        
-        if line_stripped.startswith('✅') or line_stripped.startswith('❌'):
-            # Save previous file details
-            if current_file:
-                file_details_map[current_file] = '\n'.join(current_details).strip()
-            
-            # Extract file path and clean it
-            file_path = line_stripped[2:].strip()
-            file_path = file_path.replace(temp_dir + '/', '').replace(temp_dir, '')
-            if file_path.startswith('/'):
-                file_path = file_path[1:]
-            
-            current_file = file_path
-            current_details = []
-            
-        elif current_file and line_stripped and not line_stripped.startswith('='):
-            current_details.append(line_stripped)
-    
-    # Save last file details
-    if current_file:
-        file_details_map[current_file] = '\n'.join(current_details).strip()
-    
-    # Create results based on our file lists
-    for file_path in all_files:
-        # Determine status based on validation details
-        details = file_details_map.get(file_path, '')
-        status = '❌'  # Default to failed
-        
-        # Check if validation passed (no error messages in details)
-        if details and not any(keyword in details.lower() for keyword in ['error:', 'expected:', 'no copyright', 'invalid', 'missing']):
-            status = '✅'
-        elif not details:
-            # If no details found, assume it passed (may not have been in validation output)
-            status = '✅'
-            details = 'Copyright header is valid'
-        
-        file_results.append({
-            'file': file_path,
-            'status': status,
-            'details': details
-        })
-    
-    # Format the results with proper structure
-    result_lines = []
-    result_lines.append("Copyright Validation Results:")
-    result_lines.append("=" * 50)
-    result_lines.append(f"Total files checked: {total_files}")
-    result_lines.append(f"Valid files: {valid_files}")
-    result_lines.append(f"Invalid files: {invalid_files}")
-    result_lines.append("")
-    
-    # Format each file result
-    for file_result in file_results:
-        file_path = file_result['file']
-        status = file_result['status']
-        details = file_result['details']
-        
-        # Add file with bold formatting
-        result_lines.append(f"{status} **{file_path}**")
-        
-        # Add source annotation as subtle FYI using our tracked lists
-        if file_path in files_from_diff:
-            result_lines.append("   <sub>📝 FYI: Validated with PR changes</sub>")
-        elif file_path in files_from_base:
-            result_lines.append("   <sub>⚠️ FYI: Validated with base repository version</sub>")
-        
-        # Add validation details
-        if details:
-            for detail_line in details.split('\n'):
-                if detail_line.strip():
-                    result_lines.append(f"   {detail_line.strip()}")
-        
-        result_lines.append("")
-    
-    return '\n'.join(result_lines)
 
 def create_status_check(access_token, repo_full_name, commit_sha, state, description, details_url=None):
     """Create a status check on the commit using direct API call"""
