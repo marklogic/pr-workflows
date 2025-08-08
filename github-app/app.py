@@ -200,12 +200,12 @@ class CopyrightValidator:
             for file_data in files_data:
                 if file_data['status'] in ['added', 'modified']:
                     filename = file_data['filename']
-                    # Skip dotfiles
-                    if not filename.startswith('.'):
+                    # Skip dotfiles except .copyrightconfig (which we need to track)
+                    if not filename.startswith('.') or filename == '.copyrightconfig':
                         changed_files.append(filename)
                         logger.info(f"Changed file: {filename}")
             
-            logger.info(f"Found {len(changed_files)} changed files (excluding dotfiles)")
+            logger.info(f"Found {len(changed_files)} changed files (excluding dotfiles except .copyrightconfig)")
             return changed_files
             
         except Exception as e:
