@@ -115,6 +115,53 @@ if jwt_token:
 else:
     logger.error("Failed to create GitHub App JWT token")
 
+def parse_validation_results(output):
+    """Parse structured output from copyrightcheck.py to extract file counts.
+    
+    Args:
+        output (str): The output from copyrightcheck.py
+        
+    Returns:
+        tuple: (invalid_count, valid_count, excluded_count) or (None, None, None) if parsing fails
+    """
+    if not output:
+        return None, None, None
+    
+    import re
+    
+    # Initialize counts
+    invalid_count = None
+    valid_count = None
+    excluded_count = None
+    
+    # Parse each line looking for structured count information
+    for line in output.split('\n'):
+        line = line.strip()
+        
+        # Match "Invalid files: X"
+        invalid_match = re.match(r'Invalid files:\s*(\d+)', line)
+        if invalid_match:
+            invalid_count = int(invalid_match.group(1))
+            continue
+            
+        # Match "Valid files: X"
+        valid_match = re.match(r'Valid files:\s*(\d+)', line)
+        if valid_match:
+            valid_count = int(valid_match.group(1))
+            continue
+            
+        # Match "Excluded files: X"
+        excluded_match = re.match(r'Excluded files:\s*(\d+)', line)
+        if excluded_match:
+            excluded_count = int(excluded_match.group(1))
+            continue
+    
+    # Only return parsed results if we found at least the invalid count
+    if invalid_count is not None:
+        return invalid_count, valid_count or 0, excluded_count or 0
+    else:
+        return None, None, None
+
 class CopyrightValidator:
     def __init__(self, access_token, repo_full_name, pr_number):
         try:
@@ -399,6 +446,7 @@ class CopyrightValidator:
                 # Example: /tmp/tmp123/README.MD -> README.MD
                 rel_path = os.path.relpath(abs_file_path, self.temp_dir)
                 relative_files.append(rel_path)
+                logger.info(f"🔄 Path conversion: {abs_file_path} -> {rel_path}")
                 
             # Build command with working directory pointing to base repo clone
             command = [
@@ -755,7 +803,22 @@ def format_validation_comment(result, commit_sha, files_from_diff=None, files_fr
         files_checked = result.get('files_checked', 0)
         emoji = "✅"
         title = "Copyright Validation Passed"
-        summary = f"All {files_checked} file{'s' if files_checked != 1 else ''} passed copyright validation."
+        
+        # Parse structured output for accurate counts
+        output = result.get('output', '')
+        invalid_count, valid_count, excluded_count = parse_validation_results(output)
+        
+        # Fail if parsing fails even on success
+        if valid_count is None:
+            error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
+            logger.error(error_msg)
+            raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
+        
+        display_count = valid_count
+        if excluded_count and excluded_count > 0:
+            summary = f"All {display_count} file{'s' if display_count != 1 else ''} passed copyright validation ({excluded_count} file{'s' if excluded_count != 1 else ''} excluded)."
+        else:
+            summary = f"All {display_count} file{'s' if display_count != 1 else ''} passed copyright validation."
         
         comment = f"""## {emoji} {title}
 
@@ -775,10 +838,17 @@ def format_validation_comment(result, commit_sha, files_from_diff=None, files_fr
         title = "Copyright Validation Failed"
         output = result.get('output', '')
         
-        # Extract summary from output
+        # Extract summary from structured output
         files_checked = result.get('files_checked', 0)
-        invalid_count = output.count('❌') if output else 1
-        valid_count = files_checked - invalid_count if files_checked > 0 else 0
+        invalid_count, valid_count, excluded_count = parse_validation_results(output)
+        
+        # Fail with clear error if parsing fails
+        if invalid_count is None:
+            error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
+            logger.error(error_msg)
+            raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
+            
+        logger.debug(f"Parsed validation results: invalid={invalid_count}, valid={valid_count}, excluded={excluded_count}")
         
         summary = f"Copyright validation failed for {invalid_count} file{'s' if invalid_count != 1 else ''}."
         if valid_count > 0:
@@ -883,22 +953,52 @@ def webhook():
         
         # Create status check based on results
         if result['success']:
+            # Parse structured output for accurate counts
+            output = result.get('output', '')
+            invalid_count, valid_count, excluded_count = parse_validation_results(output)
+            
+            # Use parsed valid count if available, otherwise fall back to files_checked
+            if valid_count is not None:
+                description = f"Copyright validation passed ({valid_count} files valid"
+                if excluded_count and excluded_count > 0:
+                    description += f", {excluded_count} excluded"
+                description += ")"
+            else:
+                description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
+                
             create_status_check(
                 access_token,
                 repo_full_name,
                 commit_sha,
                 'success',
-                f"Copyright validation passed ({result.get('files_checked', 0)} files)"
+                description
             )
         else:
-            # Count invalid files for concise message
-            invalid_count = result.get('output', '').count('❌') if result.get('output') else 1
+            # Parse invalid file count from structured output
+            output = result.get('output', '')
+            invalid_count, valid_count, excluded_count = parse_validation_results(output)
+            
+            # Fail if parsing fails
+            if invalid_count is None:
+                error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
+                logger.error(error_msg)
+                raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
+            
+            display_count = invalid_count
+            
+            # Ensure we have at least 1 if we're in failure state
+            if display_count == 0:
+                display_count = 1
+            
+            # Debug: log the counting
+            logger.info(f"Debug - Status check invalid file count: {display_count}")
+            
             create_status_check(
                 access_token,
                 repo_full_name,
                 commit_sha,
                 'failure',
-                f"Copyright validation failed ({invalid_count} file{'s' if invalid_count != 1 else ''} invalid)"
+                f"Copyright validation failed ({display_count} file{'s' if display_count != 1 else ''} invalid)"
             )
         
         # Create PR comment with detailed results
