@@ -388,17 +388,19 @@ class CopyrightValidator:
             # Run copyright validation with new approach
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
             
-            # Convert absolute file paths to relative paths for the script
+            # Use the original file paths (relative to repo root) directly
+            # The files exist in base_clone_dir after diff application
             base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
-            relative_files = []
             
+            # Extract just the relative file paths from our file list
+            relative_files = []
             for abs_file_path in downloaded_files:
-                # Convert from temp_dir/filename to relative path
+                # Extract relative path from the absolute path structure
                 # Example: /tmp/tmp123/README.MD -> README.MD
                 rel_path = os.path.relpath(abs_file_path, self.temp_dir)
                 relative_files.append(rel_path)
                 
-            # Build command with working directory and relative file paths
+            # Build command with working directory pointing to base repo clone
             command = [
                 'python3', script_path,
                 '--config', config_path,
