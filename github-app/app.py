@@ -174,6 +174,16 @@ class CopyrightValidator:
                     config_source = "base repository"
                     logger.info("📄 Using .copyrightconfig from base repository (unchanged by this PR)")
                 
+                # Print the config file content for debugging
+                try:
+                    with open(config_path, 'r') as f:
+                        config_content = f.read().strip()
+                    logger.info("📋 .copyrightconfig content:")
+                    for line_num, line in enumerate(config_content.split('\n'), 1):
+                        logger.info(f"   {line_num:2d}: {line}")
+                except Exception as e:
+                    logger.warning(f"Could not read config content: {e}")
+                
                 return config_path, config_source
             else:
                 logger.warning("❌ No .copyrightconfig found in repository")
@@ -377,10 +387,32 @@ class CopyrightValidator:
             
             # Run copyright validation
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
-            result = subprocess.run([
+            
+            # Log the exact command and config being used
+            command = [
                 'python3', script_path,
                 '--config', config_path
-            ] + downloaded_files,  # Add files as positional arguments
+            ] + downloaded_files
+            
+            logger.info("🔧 Copyright validation command:")
+            logger.info(f"   Script: {script_path}")
+            logger.info(f"   Config: {config_path}")
+            logger.info(f"   Working directory: {self.temp_dir}")
+            logger.info(f"   Files to validate: {len(downloaded_files)}")
+            for i, file in enumerate(downloaded_files, 1):
+                logger.info(f"     {i:2d}: {file}")
+            
+            # Show config content that the script will use
+            try:
+                with open(config_path, 'r') as f:
+                    config_content = f.read().strip()
+                logger.info("📄 Config file content passed to validation script:")
+                for line_num, line in enumerate(config_content.split('\n'), 1):
+                    logger.info(f"     {line_num:2d}: {line}")
+            except Exception as e:
+                logger.warning(f"Could not read config content before validation: {e}")
+            
+            result = subprocess.run(command,
                 cwd=self.temp_dir,
                 capture_output=True,
                 text=True,

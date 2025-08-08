@@ -38,9 +38,20 @@ class CopyrightValidator:
         """Load configuration from plain text file."""
         config = {}
         
+        print(f"📋 Loading copyright config from: {config_file}")
+        
         try:
             with open(config_file, 'r') as f:
-                for line in f:
+                content = f.read()
+                print("📄 Raw config file content:")
+                for line_num, line in enumerate(content.split('\n'), 1):
+                    print(f"     {line_num:2d}: {line}")
+                print()
+                
+                # Reset file pointer to beginning
+                f.seek(0)
+                
+                for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     
                     # Skip empty lines and comments
@@ -67,6 +78,11 @@ class CopyrightValidator:
                                 config['filesexcluded'] = [f for f in files if f]
                             else:
                                 config['filesexcluded'] = []
+                
+                print("✅ Parsed configuration:")
+                for key, value in config.items():
+                    print(f"     {key}: {value}")
+                print()
                 
                 return config
                 
