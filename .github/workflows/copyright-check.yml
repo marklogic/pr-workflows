@@ -135,8 +135,8 @@ jobs:
           echo "skip-validation=true" >> $GITHUB_OUTPUT
         else
           echo "Files to validate: $existing_count"
-          # Save file list for next step (with target-repo/ prefix for validation)
-          echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "target-repo/{}"' > ../files_to_check.txt
+          # Save file list for next step (as relative paths without prefixes)
+          echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' > ../files_to_check.txt
           echo "files-count=$existing_count" >> $GITHUB_OUTPUT
           echo "skip-validation=false" >> $GITHUB_OUTPUT
         fi
@@ -183,9 +183,11 @@ jobs:
         files_to_check=$(cat files_to_check.txt | tr '\n' ' ')
         echo "Validating files: $files_to_check"
         
-        # Run copyright validation with verbose output
+        # Run copyright validation with new standardized approach
         echo "Running copyright validation..."
-        if python3 "$script_path" -c "$config_file" -v $files_to_check; then
+        echo "🔧 Command: python3 $script_path --config $config_file --working-dir target-repo --verbose $files_to_check"
+        
+        if python3 "$script_path" --config "$config_file" --working-dir target-repo --verbose $files_to_check; then
           echo "✅ Copyright validation passed"
           echo "status=success" >> $GITHUB_OUTPUT
         else

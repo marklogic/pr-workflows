@@ -93,40 +93,37 @@ class CopyrightValidator:
             print(f"Error reading configuration file: {e}")
             sys.exit(1)
     
-    def _is_excluded(self, file_path: str) -> bool:
-        """Check if file should be excluded from copyright validation."""
-        file_path = os.path.normpath(file_path)
+    def _is_excluded(self, relative_path: str) -> bool:
+        """Check if file should be excluded from copyright validation.
         
-        # Strip common prefixes that might be added by the workflow
-        # This handles cases where files are passed as "target-repo/filename"
-        base_file_path = file_path
-        for prefix in ['target-repo/', 'target-repo\\']:
-            if file_path.startswith(prefix):
-                base_file_path = file_path[len(prefix):]
-                break
+        Args:
+            relative_path: File path relative to repository root
+        """
+        relative_path = os.path.normpath(relative_path)
         
         # Always exclude dotfiles (files starting with .)
-        filename = os.path.basename(base_file_path)
+        filename = os.path.basename(relative_path)
         if filename.startswith('.'):
+            print(f"🚫 Excluding dotfile: {relative_path}")
             return True
         
         for excluded_pattern in self.excluded_files:
             excluded_pattern = os.path.normpath(excluded_pattern)
             
-            # Check for exact match against both full path and base path
-            if file_path == excluded_pattern or base_file_path == excluded_pattern:
+            # Check for exact match
+            if relative_path == excluded_pattern:
+                print(f"🚫 Excluding (exact match): {relative_path} matches {excluded_pattern}")
                 return True
             
             # Check for pattern match (simple glob-like matching)
             if '*' in excluded_pattern:
                 pattern = excluded_pattern.replace('*', '.*')
-                if re.match(pattern, file_path) or re.match(pattern, base_file_path):
+                if re.match(pattern, relative_path):
+                    print(f"🚫 Excluding (pattern match): {relative_path} matches {excluded_pattern}")
                     return True
-            
-            # Check if file is within excluded directory
-            if (file_path.startswith(excluded_pattern + os.sep) or 
-                base_file_path.startswith(excluded_pattern + os.sep)):
-                return True
+        
+        print(f"✅ Including: {relative_path}")
+        return False
                 
         return False
     
@@ -204,12 +201,35 @@ class CopyrightValidator:
         
         return result
     
-    def validate_files(self, file_paths: List[str]) -> List[Dict[str, Any]]:
-        """Validate copyright in multiple files."""
+    def validate_files(self, file_paths: List[str], relative_paths: List[str] = None) -> List[Dict[str, Any]]:
+        """Validate copyright in multiple files.
+        
+        Args:
+            file_paths: Absolute paths to files for file operations
+            relative_paths: Relative paths for exclusion checking (optional)
+        """
         results = []
         
-        for file_path in file_paths:
+        # If no relative paths provided, use file_paths as-is
+        if relative_paths is None:
+            relative_paths = file_paths
+        
+        for file_path, relative_path in zip(file_paths, relative_paths):
+            # Use relative path for exclusion checking
+            if self._is_excluded(relative_path):
+                results.append({
+                    'file': file_path,
+                    'relative_path': relative_path,
+                    'valid': True,
+                    'excluded': True,
+                    'error': None,
+                    'found_copyright': None
+                })
+                continue
+            
+            # Use absolute path for file operations
             result = self.validate_file(file_path)
+            result['relative_path'] = relative_path
             results.append(result)
         
         return results
@@ -282,9 +302,14 @@ Examples:
     )
     
     parser.add_argument(
+        '-w', '--working-dir',
+        help='Working directory for resolving relative file paths (default: current directory)'
+    )
+    
+    parser.add_argument(
         'files',
         nargs='*',
-        help='Files to check for copyright headers'
+        help='Files to check for copyright headers (relative to working-dir if specified)'
     )
     
     parser.add_argument(
@@ -320,8 +345,35 @@ Examples:
     # Initialize validator
     validator = CopyrightValidator(args.config)
     
-    # Validate files
-    results = validator.validate_files(file_paths)
+    # Set working directory if specified
+    working_dir = args.working_dir or os.getcwd()
+    if args.working_dir:
+        print(f"📂 Working directory: {working_dir}")
+    
+    # Convert file paths to absolute paths for file operations
+    # but keep relative paths for exclusion checking
+    absolute_file_paths = []
+    relative_file_paths = []
+    
+    for file_path in file_paths:
+        if os.path.isabs(file_path):
+            # Already absolute - convert to relative for exclusion checking
+            try:
+                relative_path = os.path.relpath(file_path, working_dir)
+                absolute_file_paths.append(file_path)
+                relative_file_paths.append(relative_path)
+            except ValueError:
+                # If relpath fails, use as-is
+                absolute_file_paths.append(file_path)
+                relative_file_paths.append(file_path)
+        else:
+            # Relative path - resolve to absolute for file operations
+            absolute_path = os.path.join(working_dir, file_path)
+            absolute_file_paths.append(absolute_path)
+            relative_file_paths.append(file_path)
+    
+    # Validate files using absolute paths for file ops, relative for exclusion
+    results = validator.validate_files(absolute_file_paths, relative_file_paths)
     
     # Print results
     validator.print_results(results, verbose=args.verbose)

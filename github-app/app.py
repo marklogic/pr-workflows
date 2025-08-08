@@ -385,21 +385,32 @@ class CopyrightValidator:
             if not script_path:
                 return {'success': False, 'error': 'Copyright validation script not found'}
             
-            # Run copyright validation
+            # Run copyright validation with new approach
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
             
-            # Log the exact command and config being used
+            # Convert absolute file paths to relative paths for the script
+            base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
+            relative_files = []
+            
+            for abs_file_path in downloaded_files:
+                # Convert from temp_dir/filename to relative path
+                # Example: /tmp/tmp123/README.MD -> README.MD
+                rel_path = os.path.relpath(abs_file_path, self.temp_dir)
+                relative_files.append(rel_path)
+                
+            # Build command with working directory and relative file paths
             command = [
                 'python3', script_path,
-                '--config', config_path
-            ] + downloaded_files
+                '--config', config_path,
+                '--working-dir', base_clone_dir
+            ] + relative_files
             
             logger.info("🔧 Copyright validation command:")
             logger.info(f"   Script: {script_path}")
             logger.info(f"   Config: {config_path}")
-            logger.info(f"   Working directory: {self.temp_dir}")
-            logger.info(f"   Files to validate: {len(downloaded_files)}")
-            for i, file in enumerate(downloaded_files, 1):
+            logger.info(f"   Working directory: {base_clone_dir}")
+            logger.info(f"   Files to validate: {len(relative_files)}")
+            for i, file in enumerate(relative_files, 1):
                 logger.info(f"     {i:2d}: {file}")
             
             # Show config content that the script will use
@@ -413,7 +424,7 @@ class CopyrightValidator:
                 logger.warning(f"Could not read config content before validation: {e}")
             
             result = subprocess.run(command,
-                cwd=self.temp_dir,
+                cwd=base_clone_dir,  # Run from the base repository directory
                 capture_output=True,
                 text=True,
                 timeout=300
