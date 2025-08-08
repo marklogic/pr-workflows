@@ -237,9 +237,9 @@ class CopyrightValidator:
     def print_results(self, results: List[Dict[str, Any]], verbose: bool = False):
         """Print validation results."""
         total_files = len(results)
-        valid_files = sum(1 for r in results if r['valid'])
+        valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
-        invalid_files = total_files - valid_files
+        invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
         
         print(f"\nCopyright Validation Results:")
         print(f"{'=' * 50}")
