@@ -5,10 +5,7 @@ Copyright validation script for checking copyright headers in source files.
 This script validates that files contain the correct copyright header format
 based on configuration settings.
 
-Always emits at end of stdout two delimited summary blocks:
-  <<<COPYRIGHT-CHECK:JSON>>>
-  { ... json summary ... }
-  <<<END COPYRIGHT-CHECK:JSON>>>
+Always emits at end of stdout one delimited Markdown summary block:
   <<<COPYRIGHT-CHECK:MARKDOWN>>>
   ... markdown summary ...
   <<<END COPYRIGHT-CHECK:MARKDOWN>>>
@@ -19,7 +16,6 @@ import argparse
 import os
 import re
 import sys
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Set, Dict, Any
@@ -342,11 +338,8 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
 
 
 def emit_summary_blocks(struct: Dict[str, Any]):
-    json_block = json.dumps(struct, indent=2, sort_keys=True)
+    # Renamed semantic: now only emits the markdown block
     md_block = build_markdown_summary(struct)
-    print('<<<COPYRIGHT-CHECK:JSON>>>')
-    print(json_block)
-    print('<<<END COPYRIGHT-CHECK:JSON>>>')
     print('<<<COPYRIGHT-CHECK:MARKDOWN>>>')
     print(md_block, end='')
     print('<<<END COPYRIGHT-CHECK:MARKDOWN>>>')

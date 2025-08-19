@@ -7,234 +7,105 @@ jobs:
   copyright-check:
     name: Validate Copyright Headers
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout PR head (target repository code)
+    - name: Checkout PR head
       uses: actions/checkout@v4
       with:
-        # Checkout the PR head - this gets the target repo code with changes
         ref: ${{ github.event.pull_request.head.sha }}
         path: target-repo
-    
-    - name: Checkout pr-workflows repository (for validation script)
+
+    - name: Checkout pr-workflows repo
       uses: actions/checkout@v4
       with:
         repository: ${{ github.repository_owner }}/pr-workflows
         ref: copyright
         path: pr-workflows
-    
-    - name: Setup copyright configuration
+
+    - name: Setup config
       id: setup-config
       run: |
-        echo "Setting up copyright configuration..."
-        
-        config_file="target-repo/.copyrightconfig"
-        config_source="PR head"
-        
-        # Check if config file exists in PR head
-        if [ ! -f "$config_file" ]; then
-          echo "Config file not in PR head, checking base branch..."
-          
-          # Checkout base repository to get config file
-          # Use GITHUB_TOKEN for authentication (works for both public and private repos)
+        cfg="target-repo/.copyrightconfig"
+        if [ ! -f "$cfg" ]; then
           git clone --depth 1 --branch ${{ github.event.pull_request.base.ref }} \
             https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git base-repo
-          
-          base_config_file="base-repo/.copyrightconfig"
-          
-          if [ -f "$base_config_file" ]; then
-            echo "Using config from base repository"
-            config_file="$base_config_file"
-            config_source="base repository"
-          else
-            echo "Error: .copyrightconfig not found" && exit 1
-          fi
-        else
-          echo "Using config from PR head"
+          [ -f base-repo/.copyrightconfig ] && cfg="base-repo/.copyrightconfig"
         fi
-        
-        # Validate config file content
-        if [ ! -s "$config_file" ]; then
-          echo "Error: empty config" && exit 1
-        fi
-        
-        # Check for required startyear
-        if ! grep -q "^startyear:" "$config_file"; then
-          echo "Error: startyear missing" && exit 1
-        fi
-        
-        echo "✅ Using copyright configuration from $config_source"
-        echo "Configuration content:"
-        echo "========================"
-        cat "$config_file"
-        echo "========================"
-        
-        # Export config file path for later steps
-        echo "config-file=$config_file" >> $GITHUB_OUTPUT
-    
+        [ -f "$cfg" ] || { echo "missing config"; exit 1; }
+        [ -s "$cfg" ] || { echo "empty config"; exit 1; }
+        grep -q '^startyear:' "$cfg" || { echo "startyear missing"; exit 1; }
+        echo "config-file=$cfg" >> $GITHUB_OUTPUT
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-    
+
     - name: Get changed files
       id: changed-files
       run: |
-        echo "Getting list of changed files..."
-        
         cd target-repo
-        
-        # Get the base and head refs for comparison
         base_sha="${{ github.event.pull_request.base.sha }}"
         head_sha="${{ github.event.pull_request.head.sha }}"
-        
-        echo "Getting changes introduced by the PR..."
-        echo "Base SHA: $base_sha"
-        echo "Head SHA: $head_sha"
-        
-        # Fetch the base branch to compare against
         git fetch origin ${{ github.event.pull_request.base.ref }}
-        
-        # Get files changed between base and PR head
-        changed_files=$(git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha")
-        
-        if [ -z "$changed_files" ]; then
-            echo "No files changed in this PR"
-            echo "files-count=0" >> $GITHUB_OUTPUT
-            echo "skip-validation=true" >> $GITHUB_OUTPUT
-            exit 0
-        fi
-        
-        echo "Files changed by PR:"
-        echo "$changed_files"
-        
-        # Filter existing files and create list for validation
-        echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' > ../files_to_check.txt
-        existing_count=$(cat ../files_to_check.txt | wc -l | tr -d ' ')
-        
-        if [ "$existing_count" -eq 0 ]; then
-          echo "No existing files to validate (all files were deleted)"
-          echo "files-count=0" >> $GITHUB_OUTPUT
+        git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
+        count=$(wc -l < ../files_to_check.txt | tr -d ' ')
+        if [ "$count" -eq 0 ]; then
           echo "skip-validation=true" >> $GITHUB_OUTPUT
         else
-          echo "Files to validate: $existing_count"
-          # Save file list for next step (as relative paths without prefixes)
-          echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' > ../files_to_check.txt
-          echo "files-count=$existing_count" >> $GITHUB_OUTPUT
           echo "skip-validation=false" >> $GITHUB_OUTPUT
         fi
-    
+        echo "files-count=$count" >> $GITHUB_OUTPUT
+
     - name: Validate
       id: validate
       if: steps.changed-files.outputs.skip-validation != 'true'
       continue-on-error: true
       run: |
-        set -o pipefail
-        echo "Starting copyright validation..."
-        
-        # Debug: List current directory contents
-        echo "Current directory contents:"
-        ls -la
-        
-        # Debug: Check pr-workflows directory structure
-        echo "pr-workflows directory contents:"
-        ls -la pr-workflows/
-        if [ -d "pr-workflows/scripts" ]; then
-          echo "pr-workflows/scripts directory contents:"
-          ls -la pr-workflows/scripts/
-        else
-          echo "❌ pr-workflows/scripts directory does not exist"
-        fi
-        
-        script_path="pr-workflows/scripts/copyrightcheck.py"
-        config_file="${{ steps.setup-config.outputs.config-file }}"
-        
-        # Verify copyright script exists in pr-workflows repo
-        if [ ! -f "$script_path" ]; then
-          echo "❌ Error: $script_path not found in pr-workflows repository"
-          echo "Please ensure the copyright check script exists in the pr-workflows repository"
-          exit 1
-        fi
-        
-        # Make script executable
-        chmod +x "$script_path"
-        
-        # Read files to check
-        if [ ! -f "files_to_check.txt" ]; then
-          echo "❌ Error: No files to check"
-          exit 1
-        fi
-        
-        files_to_check=$(tr '\n' ' ' < files_to_check.txt)
-        echo "Validating files: $files_to_check"
-        
-        # Run validation (script always verbose now)
-        echo "Running copyright validation..."
-        echo "🔧 Command: python3 $script_path --config $config_file --working-dir target-repo $files_to_check"
-        
-        if python3 "$script_path" --config "$config_file" --working-dir target-repo $files_to_check > validation_output.txt 2>&1; then
-          echo "✅ Copyright validation passed"
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Copyright validation failed"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          # Still proceed to allow summary extraction and proper job summary; final job result handled later
-        fi
-    
-    - name: Job Summary (Markdown block extraction)
+        script="pr-workflows/scripts/copyrightcheck.py"
+        cfg="${{ steps.setup-config.outputs.config-file }}"
+        [ -f "$script" ] || { echo "script missing"; exit 1; }
+        chmod +x "$script"
+        files=$(tr '\n' ' ' < files_to_check.txt)
+        python3 "$script" --config "$cfg" --working-dir target-repo $files > validation_output.txt 2>&1
+        ec=$?
+        if [ $ec -eq 0 ]; then echo "status=success" >> $GITHUB_OUTPUT; else echo "status=failed" >> $GITHUB_OUTPUT; fi
+        exit $ec
+
+    - name: Extract Markdown summary
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
-        summary_file="$GITHUB_STEP_SUMMARY"
-        if [ ! -f validation_output.txt ]; then
-          echo "No validation output captured" >> "$summary_file"
-          exit 0
-        fi
-        awk '/^<<<COPYRIGHT-CHECK:MARKDOWN>>>/{flag=1;next}/^<<<END COPYRIGHT-CHECK:MARKDOWN>>>/{flag=0}flag' validation_output.txt >> "$summary_file"
-    
-    - name: Annotate Summary
+        awk '/^<<<COPYRIGHT-CHECK:MARKDOWN>>>/{f=1;next}/^<<<END COPYRIGHT-CHECK:MARKDOWN>>>/{f=0}f' validation_output.txt > summary.md
+        cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Annotations (from markdown)
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
         python3 - <<'PY'
-import re, json, pathlib
-text = pathlib.Path('validation_output.txt').read_text()
-# Exact block extraction (no fallback parsing)
-m = re.search(r'<<<COPYRIGHT-CHECK:JSON>>>\s*(.*?)\s*<<<END COPYRIGHT-CHECK:JSON>>>', text, re.S)
+import re, sys
+md=open('summary.md').read()
+lines=[l for l in md.splitlines() if l.strip()]
+if len(lines)<2:
+    sys.exit(0)
+counts_line=lines[1]
+pat=r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
+m=re.search(pat, counts_line)
 if not m:
-    # No annotation if block missing (no fallback)
-    raise SystemExit(0)
-js = json.loads(m.group(1))
-counts = js.get('counts', {})
-failed = counts.get('invalid', 0)
-summary_parts = [
-    f"Total {counts.get('total',0)}",
-    f"Passed {counts.get('valid',0)}",
-    f"Failed {failed}"
-]
-skipped = counts.get('excluded',0)
-if skipped:
-    summary_parts.append(f"Skipped {skipped}")
-summary_line = ' | '.join(summary_parts)
-if failed > 0:
-    print(f"::error title=Copyright Summary::{summary_line}")
-    failed_files = js.get('failed', [])
-    if failed_files:
-        # Truncate list to first 10
-        display = failed_files[:10]
-        listing = ', '.join(f['file'] for f in display)
-        extra = '' if len(failed_files) <= 10 else f" (+{len(failed_files)-10} more)"
-        print(f"::error title=Failed Files::{listing}{extra}")
+    sys.exit(0)
+Total,Passed,Failed,Skipped=m.groups()
+Total=int(Total); Passed=int(Passed); Failed=int(Failed); Skipped=int(Skipped) if Skipped else 0
+summary=f"Total {Total} | Passed {Passed} | Failed {Failed}" + (f" | Skipped {Skipped}" if Skipped else '')
+if Failed>0:
+    print(f"::error title=Copyright Summary::{summary}")
 else:
-    print(f"::notice title=Copyright Summary::{summary_line}")
+    print(f"::notice title=Copyright Summary::{summary}")
 PY
-    
+
     - name: Fail if needed
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
-        if [ "${{ steps.validate.outputs.status }}" != "success" ]; then
-          exit 1
-        fi
-    
+        [ "${{ steps.validate.outputs.status }}" = "success" ] || exit 1
+
     - name: No-op summary
       if: steps.changed-files.outputs.skip-validation == 'true'
-      run: |
-        echo "::notice title=Copyright Check::No files to validate"
+      run: echo "::notice title=Copyright Check::No files to validate"

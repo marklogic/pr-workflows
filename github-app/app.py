@@ -139,9 +139,8 @@ if jwt_token:
 else:
     logger.error("Failed to create GitHub App JWT token")
 
-# --- New helpers for structured block extraction ---
-JSON_START = '<<<COPYRIGHT-CHECK:JSON>>>'
-JSON_END = '<<<END COPYRIGHT-CHECK:JSON>>>'
+# --- New helpers for structured block extraction (Markdown only) ---
+# Removed JSON block support; validation script now emits only markdown summary block.
 MD_START = '<<<COPYRIGHT-CHECK:MARKDOWN>>>'
 MD_END = '<<<END COPYRIGHT-CHECK:MARKDOWN>>>'
 
@@ -153,20 +152,89 @@ def extract_block(text, start_marker, end_marker):
     except ValueError:
         return None
 
-def parse_script_output(raw_stdout):
-    json_block = extract_block(raw_stdout, JSON_START, JSON_END)
-    md_block = extract_block(raw_stdout, MD_START, MD_END)
-    structured = None
-    if json_block:
-        try:
-            structured = json.loads(json_block)
-        except Exception as e:
-            logger.error(f"Failed to parse JSON summary block: {e}")
-    else:
-        logger.warning("JSON summary block not found in script output")
+def parse_markdown_counts(md_block):
+    """Parse counts line from markdown summary.
+    Expected second line like:
+    Total: X | Passed: Y | Failed: Z | Skipped: N (Skipped segment optional)
+    """
     if not md_block:
-        logger.warning("Markdown summary block not found in script output")
-    return structured, md_block
+        return {}
+    lines = [l.strip() for l in md_block.splitlines() if l.strip()]
+    if len(lines) < 2:
+        return {}
+    counts_line = lines[1]
+    pattern = r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
+    m = re.search(pattern, counts_line)
+    if not m:
+        return {}
+    total, passed, failed, skipped = m.groups()
+    return {
+        'total': int(total),
+        'valid': int(passed),
+        'invalid': int(failed),
+        'excluded': int(skipped) if skipped is not None else 0
+    }
+
+def parse_script_output_markdown(raw_stdout):
+    md_block = extract_block(raw_stdout, MD_START, MD_END)
+    counts = parse_markdown_counts(md_block)
+    if md_block and counts:
+        structured = {'counts': counts, 'markdown': md_block}
+    elif md_block:
+        structured = {'markdown': md_block}
+    else:
+        structured = None
+    return structured
+
+def build_summary_comment(structured, commit_sha):
+    """Return markdown for PR comment from structured data (markdown already present)."""
+    if not structured:
+        return "No summary available."
+    md = structured.get('markdown', '')
+    footer = f"\n_Commit: {commit_sha}_"
+    if not md.endswith('\n'):
+        md += '\n'
+    return md + footer
+
+def find_existing_comment(access_token, repo_full_name, pr_number):
+    try:
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/{pr_number}/comments"
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        resp = requests.get(api_url, headers=headers, verify=VERIFY_SSL)
+        if resp.status_code != 200:
+            return None
+        for c in resp.json():
+            body = c.get('body', '')
+            if body.startswith('## ✅ Copyright Validation') or body.startswith('## ❌ Copyright Validation'):
+                return c.get('id')
+    except Exception:
+        return None
+    return None
+
+def update_pr_comment(access_token, repo_full_name, comment_id, body):
+    try:
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/comments/{comment_id}"
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        requests.patch(api_url, json={'body': body}, headers=headers, verify=VERIFY_SSL)
+    except Exception as e:
+        logger.error(f"Failed to update PR comment: {e}")
+
+def create_pr_comment(access_token, repo_full_name, pr_number, body):
+    try:
+        api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/{pr_number}/comments"
+        headers = {
+            'Authorization': f'token {access_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        requests.post(api_url, json={'body': body}, headers=headers, verify=VERIFY_SSL)
+    except Exception as e:
+        logger.error(f"Failed to create PR comment: {e}")
 
 class CopyrightValidator:
     def __init__(self, access_token, repo_full_name, pr_number):
@@ -493,7 +561,7 @@ class CopyrightValidator:
             
             structured = None
             try:
-                structured = parse_script_output(result.stdout)
+                structured = parse_script_output_markdown(result.stdout)
             except Exception as e:
                 logger.error(f"Structured parsing failed; no PR comment will be posted: {e}")
             
@@ -685,16 +753,7 @@ def webhook():
                     description += f", {excluded_count} excluded"
                 description += ")"
             else:
-                # Fallback to legacy simple parsing
-                output = result.get('output', '')
-                invalid_count, valid_count, excluded_count = parse_validation_results(output)
-                if valid_count is not None:
-                    description = f"Copyright validation passed ({valid_count} files valid"
-                    if excluded_count:
-                        description += f", {excluded_count} excluded"
-                    description += ")"
-                else:
-                    description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
+                description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
             create_status_check(
                 access_token,
                 repo_full_name,
@@ -704,18 +763,12 @@ def webhook():
             )
         else:
             structured = result.get('structured')
-            if structured:
-                counts = structured.get('counts', {})
+            if structured and structured.get('counts'):
+                counts = structured['counts']
                 invalid_count = counts.get('invalid', 0)
                 display_count = invalid_count or 1
             else:
-                output = result.get('output', '')
-                invalid_count, valid_count, excluded_count = parse_validation_results(output)
-                if invalid_count is None:
-                    error_msg = f"Failed to parse output. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
-                    logger.error(error_msg)
-                    raise Exception("Copyright validation script output parsing failed.")
-                display_count = invalid_count or 1
+                display_count = 1
             logger.info(f"Debug - Status check invalid file count: {display_count}")
             create_status_check(
                 access_token,
