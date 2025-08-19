@@ -18,9 +18,7 @@ import subprocess
 import shutil
 import base64
 import re
-import json
 
-# Replace basicConfig with explicit dual handlers: stdout + rotating file
 LOG_DIR = '/var/log/app'
 LOG_FILE = os.path.join(LOG_DIR, 'app.log')
 logger = logging.getLogger()  # root logger so all modules inherit
@@ -52,7 +50,6 @@ app = Flask(__name__)
 # GitHub App configuration
 APP_ID = os.environ.get('GITHUB_APP_ID')
 PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
-WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET')
 GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com').rstrip('/')  # Remove trailing slash
 
 # Script repository configuration (defaults to GitHub.com)
@@ -211,8 +208,6 @@ def find_existing_comment(access_token, repo_full_name, pr_number):
         for c in resp.json():
             body = c.get('body', '')
             if '<!-- COPYRIGHT-CHECK-COMMENT:' in body:  # use hidden marker
-                return c.get('id')
-            if body.startswith('## ✅ Copyright Validation') or body.startswith('## ❌ Copyright Validation'):
                 return c.get('id')
     except Exception:
         return None
@@ -640,7 +635,7 @@ def create_or_update_pr_comment(access_token, repo_full_name, pr_number, body):
         if existing.status_code == 200:
             for c in existing.json():
                 b = c.get('body','')
-                if '<!-- COPYRIGHT-CHECK-COMMENT:' in b or b.startswith('## ✅ Copyright Validation') or b.startswith('## ❌ Copyright Validation'):
+                if '<!-- COPYRIGHT-CHECK-COMMENT:' in b:
                     target_id = c['id']; break
         if target_id:
             upd_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/comments/{target_id}"

@@ -17,8 +17,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from pathlib import Path
-from typing import List, Set, Dict, Any
+from typing import List, Dict, Any
 
 # Truncation safeguards constants
 MAX_MARKDOWN_LENGTH = 60000  # ~60KB safeguard for GitHub comment/body limits
@@ -156,8 +155,10 @@ class CopyrightValidator:
         
         return normalized_actual == normalized_expected
     
-    def validate_file(self, file_path: str) -> Dict[str, Any]:
-        """Validate copyright in a single file."""
+    def validate_file(self, file_path: str, skip_exclusion: bool = False) -> Dict[str, Any]:
+        """Validate copyright in a single file.
+        skip_exclusion: when True, caller already performed exclusion logic.
+        """
         result = {
             'file': file_path,
             'valid': False,
@@ -166,20 +167,14 @@ class CopyrightValidator:
             'found_copyright': '',
             'expected_copyright': self._get_expected_copyright()
         }
-        
-        # Check if file is excluded
-        if self._is_excluded(file_path):
+        if not skip_exclusion and self._is_excluded(file_path):
             result['excluded'] = True
-            result['valid'] = True  # Excluded files are considered valid
+            result['valid'] = True
             return result
-        
         try:
-            # Check if file exists
             if not os.path.exists(file_path):
                 result['error'] = f"File not found: {file_path}"
                 return result
-            
-            # Read file content
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
@@ -203,13 +198,12 @@ class CopyrightValidator:
         return result
     
     def validate_files(self, file_paths: List[str], relative_paths: List[str] = None) -> List[Dict[str, Any]]:
-        """Validate multiple files with single exclusion pass."""
+        """Validate multiple files with single exclusion pass (no duplicate exclusion checks)."""
         results = []
         if relative_paths is None:
             relative_paths = file_paths
         for file_path, relative_path in zip(file_paths, relative_paths):
-            excluded = self._is_excluded(relative_path)
-            if excluded:
+            if self._is_excluded(relative_path):
                 results.append({
                     'file': file_path,
                     'relative_path': relative_path,
@@ -219,9 +213,9 @@ class CopyrightValidator:
                     'found_copyright': None
                 })
                 continue
-            result = self.validate_file(file_path)  # validate_file will call _is_excluded again but we could refactor further if desired
-            result['relative_path'] = relative_path
-            results.append(result)
+            r = self.validate_file(file_path, skip_exclusion=True)
+            r['relative_path'] = relative_path
+            results.append(r)
         return results
     
     def print_results(self, results: List[Dict[str, Any]]):
@@ -316,8 +310,28 @@ def build_summary_struct(results: List[Dict[str, Any]], origins: Dict[str, str] 
     return struct
 
 
+def parse_markdown_counts(md_block):
+    """Strict parse counts line from markdown summary; raise on failure."""
+    if not md_block:
+        raise ValueError("No markdown block provided")
+    lines = [l.strip() for l in md_block.splitlines() if l.strip()]
+    if len(lines) < 2:
+        raise ValueError("Markdown summary missing counts line")
+    counts_line = lines[1]
+    pattern = r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
+    m = re.search(pattern, counts_line)
+    if not m:
+        raise ValueError(f"Counts line not parseable: {counts_line}")
+    total, passed, failed, skipped = m.groups()
+    return {
+        'total': int(total),
+        'valid': int(passed),
+        'invalid': int(failed),
+        'excluded': int(skipped) if skipped is not None else 0
+    }
+
+
 def build_markdown_summary(struct: Dict[str, Any]) -> str:
-    # ...existing code before loops...
     counts = struct['counts']
     total = counts.get('total', 0)
     valid = counts.get('valid', 0)
@@ -330,7 +344,6 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
     if excluded:
         parts.append(f"Skipped: {excluded}")
     lines = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
-    # UPDATED: include source markers next to each file if present
     def fmt_file(entry, prefix_symbol):
         src = entry.get('source')
         if src:
@@ -349,7 +362,6 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
         for f in struct['skipped']:
             lines.append(fmt_file(f, '⏭️'))
         lines.append('')
-    # Passed files (may get truncated if overall markdown too large)
     passed_entries = struct['passed']
     if passed_entries:
         lines.append('### Passed Files')
@@ -360,17 +372,8 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
         lines.append('### Fix Guidance')
         lines.append('Update headers to match Expected line above; then push changes.')
     md = '\n'.join(lines).rstrip() + '\n'
-
-    # Truncation safeguard: if markdown exceeds limit, rebuild with truncated passed list
     if len(md) > MAX_MARKDOWN_LENGTH and passed_entries:
-        # Rebuild passed section truncated
-        truncated_lines = []
-        # Keep everything up to '### Passed Files' header
-        # Easier: rebuild from scratch with truncated passed list only
-        lines_trunc = []
-        lines_trunc.append(f"## {header_emoji} {header_title}")
-        lines_trunc.append(' | '.join(parts))
-        lines_trunc.append('')
+        lines_trunc = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
         if struct['failed']:
             lines_trunc.append('### Failed Files')
             for f in struct['failed']:
@@ -385,10 +388,10 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
                 lines_trunc.append(fmt_file(f, '⏭️'))
             lines_trunc.append('')
         lines_trunc.append('### Passed Files (truncated)')
-        display_subset = passed_entries[:PASS_LIST_TRUNCATE_THRESHOLD]
-        for f in display_subset:
+        subset = passed_entries[:PASS_LIST_TRUNCATE_THRESHOLD]
+        for f in subset:
             lines_trunc.append(fmt_file(f, '✅'))
-        remaining = len(passed_entries) - len(display_subset)
+        remaining = len(passed_entries) - len(subset)
         if remaining > 0:
             lines_trunc.append(f"… +{remaining} more passed files truncated")
         lines_trunc.append('')

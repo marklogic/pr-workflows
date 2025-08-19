@@ -54,41 +54,13 @@ jobs:
         git fetch origin ${{ github.event.pull_request.base.ref }}
         git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
         count=$(wc -l < ../files_to_check.txt | tr -d ' ')
-        if [ "$count" -eq 0 ]; then
-          echo "skip-validation=true" >> $GITHUB_OUTPUT
-        else
-          echo "skip-validation=false" >> $GITHUB_OUTPUT
-        fi
+        if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
         echo "files-count=$count" >> $GITHUB_OUTPUT
-
-    - name: Build origins mapping
-      if: steps.changed-files.outputs.skip-validation != 'true'
-      run: |
-        base_dir=base-repo
-        mkdir -p "$base_dir"
-        git clone --depth 1 --branch ${{ github.event.pull_request.base.ref }} \
-          https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git "$base_dir" >/dev/null 2>&1
-        : > origins.txt
-        while read f; do
-          if [ -f "target-repo/$f" ]; then
-            if ! diff -q "target-repo/$f" "$base_dir/$f" >/dev/null 2>&1; then
-              echo "$f PR" >> origins.txt
-            else
-              echo "$f Base" >> origins.txt
-            fi
-          else
-            echo "$f Base" >> origins.txt
-          fi
-        done < files_to_check.txt
-        echo 'Origins mapping:'
-        cat origins.txt
 
     - name: Validate
       id: validate
       if: steps.changed-files.outputs.skip-validation != 'true'
       continue-on-error: true
-      env:
-        COPYRIGHT_ORIGINS_FILE: origins.txt
       run: |
         script="pr-workflows/scripts/copyrightcheck.py"
         cfg="${{ steps.setup-config.outputs.config-file }}"
@@ -115,9 +87,7 @@ jobs:
       with:
         script: |
           const fs = require('fs');
-          const hasPR = !!context.payload.pull_request;
-          core.info(`Has pull_request in context: ${hasPR}`);
-          if (!hasPR) { core.warning('No pull_request context; skipping comment.'); return; }
+          if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); return; }
           let mdRaw='';
           try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.setFailed('summary.md not found'); return; }
           const sha = context.payload.pull_request.head.sha;
@@ -125,22 +95,18 @@ jobs:
           if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
           const md = mdRaw + `_Commit: ${sha}_`;
           const number = context.payload.pull_request.number;
-          core.info(`Target PR #${number}`);
           try {
             const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, per_page: 100 });
-            core.info(`Fetched ${comments.length} existing comments`);
-            const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:')) || comments.find(c => (c.body||'').startsWith('## ✅ Copyright Validation') || (c.body||'').startsWith('## ❌ Copyright Validation'));
+            const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
             if (existing) {
-              core.info(`Updating existing summary comment id=${existing.id}`);
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: md });
             } else {
-              core.info('Creating new summary comment');
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, body: md });
             }
           } catch(e) {
             core.error(`Failed to create/update PR comment: ${e.status || ''} ${e.message}`);
             if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
-            core.warning('Continuing without PR comment. Ensure permissions include issues: write.');
+            core.warning('Continuing without PR comment.');
           }
 
     - name: Fail if needed
