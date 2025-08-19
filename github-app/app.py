@@ -485,12 +485,19 @@ class CopyrightValidator:
             if result.stderr:
                 logger.warning(f"Stderr: {result.stderr}")
             
+            structured = None
+            try:
+                structured = parse_validation_stdout(result.stdout, base_clone_dir, self.files_from_diff, self.files_from_base)
+            except Exception as e:
+                logger.error(f"Structured parsing failed; no PR comment will be posted: {e}")
+            
             if result.returncode == 0:
                 return {
                     'success': True,
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
-                    'output': result.stdout
+                    'output': result.stdout,
+                    'structured': structured
                 }
             else:
                 return {
@@ -498,7 +505,8 @@ class CopyrightValidator:
                     'files_checked': len(downloaded_files),
                     'config_source': config_source,
                     'error': result.stdout + result.stderr,
-                    'output': result.stdout
+                    'output': result.stdout,
+                    'structured': structured
                 }
                 
         except subprocess.TimeoutExpired:
@@ -658,103 +666,244 @@ def update_pr_comment(access_token, repo_full_name, comment_id, comment_body):
         logger.error(f"Failed to update PR comment: {e}")
         return None
 
-def format_validation_comment(result, commit_sha, files_from_diff=None, files_from_base=None):
-    """Format validation results into a GitHub markdown comment"""
-    # Add timestamp and commit info for tracking
+def parse_validation_stdout(stdout_text, base_repo_dir, files_from_diff, files_from_base):
+    """Parse stdout from copyrightcheck.py into structured summary.
+    Does not rely on emoji branching logic; uses headings and patterns.
+    Returns structured dict or raises on fatal parsing errors.
+    """
+    lines = stdout_text.splitlines()
+    counts = { 'total': 0, 'valid': 0, 'invalid': 0, 'excluded': 0 }
+    exclusion_reasons = {}  # relative_path -> reason (dotfile | config:exact | config:pattern)
+
+    # First pass: counts + exclusion reason lines
+    for raw in lines:
+        t = raw.strip()
+        if t.startswith('Total files checked:'):
+            try: counts['total'] = int(t.split(':',1)[1].strip())
+            except: pass
+        elif t.startswith('Valid files:'):
+            try: counts['valid'] = int(t.split(':',1)[1].strip())
+            except: pass
+        elif t.startswith('Invalid files:'):
+            try: counts['invalid'] = int(t.split(':',1)[1].strip())
+            except: pass
+        elif t.startswith('Excluded files:'):
+            try: counts['excluded'] = int(t.split(':',1)[1].strip())
+            except: pass
+        elif 'Excluding dotfile:' in t:
+            rel = t.split('Excluding dotfile:',1)[1].strip()
+            exclusion_reasons[rel] = 'dotfile'
+        elif 'Excluding (exact match):' in t and 'matches' in t:
+            part = t.split('Excluding (exact match):',1)[1]
+            rel = part.split('matches',1)[0].strip()
+            exclusion_reasons[rel] = 'config:exact'
+        elif 'Excluding (pattern match):' in t and 'matches' in t:
+            part = t.split('Excluding (pattern match):',1)[1]
+            rel = part.split('matches',1)[0].strip()
+            exclusion_reasons[rel] = 'config:pattern'
+
+    # Sections
+    def find_index(prefix):
+        for i,l in enumerate(lines):
+            if l.strip().startswith(prefix):
+                return i
+        return -1
+    excluded_idx = find_index('Excluded files:')
+    valid_idx = find_index('Valid files:')
+
+    # Collect excluded absolute paths
+    excluded_abs = []
+    if excluded_idx != -1:
+        for l in lines[excluded_idx+1:]:
+            s = l.strip()
+            if not s or s.startswith('Valid files:'):
+                break
+            # Path after first '/'
+            if '/' in s:
+                p = s[s.index('/') : ].strip()
+                excluded_abs.append(p)
+    # Collect valid absolute paths
+    valid_abs = []
+    if valid_idx != -1:
+        for l in lines[valid_idx+1:]:
+            s = l.strip()
+            if not s:
+                break
+            if '/' in s:
+                p = s[s.index('/') : ].strip()
+                valid_abs.append(p)
+
+    # Collect invalid blocks (between summary and Excluded section)
+    # Determine region end
+    region_end = excluded_idx if excluded_idx != -1 else (valid_idx if valid_idx != -1 else len(lines))
+    invalid_blocks = []
+    current_path = None
+    current_found = None
+    current_expected = None
+    current_error = None
+    for i, raw in enumerate(lines):
+        if i >= region_end:
+            break
+        t = raw.rstrip('\n')
+        s = t.strip()
+        if not s:
+            # blank resets pending block
+            current_path = None
+            current_found = current_expected = current_error = None
+            continue
+        # Skip headings and summary lines
+        if s.startswith('Total files checked:') or s.startswith('Valid files:') or s.startswith('Invalid files:') or s.startswith('Excluded files:'):
+            continue
+        if s.startswith('Expected:') or s.startswith('Found:') or s.startswith('Error:'):
+            # Should have a current_path
+            if current_path is None:
+                continue
+            if s.startswith('Found:'):
+                current_found = s.split('Found:',1)[1].strip()
+            elif s.startswith('Expected:'):
+                current_expected = s.split('Expected:',1)[1].strip()
+            elif s.startswith('Error:'):
+                current_error = s.split('Error:',1)[1].strip()
+            # If we have expected we can treat as complete (expected line always printed for invalid)
+            if current_expected is not None:
+                invalid_blocks.append({
+                    'abs_path': current_path,
+                    'found': current_found,
+                    'expected': current_expected,
+                    'error': current_error
+                })
+            continue
+        # Potential path line (contains '/' ) and not a heading
+        if '/' in s:
+            # Extract substring from first '/'
+            path_candidate = s[s.index('/') : ]
+            current_path = path_candidate
+            current_found = current_expected = current_error = None
+
+    # Helper: convert absolute path to relative repo root path
+    def to_rel(p):
+        if not p:
+            return p
+        # base_repo_dir e.g. /tmp/tmpxyz/base_repo
+        if p.startswith(base_repo_dir):
+            rel = p[len(base_repo_dir):]
+            if rel.startswith('/'):
+                rel = rel[1:]
+            return rel
+        # Remove leading slash for cleanliness
+        return p.lstrip('/')
+
+    # Build failed list
+    failed = []
+    for blk in invalid_blocks:
+        rel = to_rel(blk['abs_path'])
+        source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
+        failed.append({
+            'file': rel,
+            'found': blk.get('found'),
+            'expected': blk.get('expected'),
+            'error': blk.get('error'),
+            'source': source
+        })
+
+    # Passed list (exclude invalid and excluded)
+    invalid_set = {f['file'] for f in failed}
+    excluded_rel_all = [to_rel(p) for p in excluded_abs]
+    excluded_set = set(excluded_rel_all)
+
+    passed = []
+    for p in valid_abs:
+        rel = to_rel(p)
+        if rel not in invalid_set and rel not in excluded_set:
+            source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
+            passed.append({ 'file': rel, 'source': source })
+
+    # Skipped (config only)
+    skipped = []
+    skipped_rel = []
+    for rel in excluded_rel_all:
+        reason = exclusion_reasons.get(rel)
+        if reason and reason.startswith('config:'):
+            skipped_rel.append(rel)
+            source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
+            skipped.append({ 'file': rel, 'source': source, 'reason': reason })
+
+    structured = {
+        'counts': counts,
+        'failed': failed,
+        'passed': passed,
+        'skipped': skipped,
+        'exclusion_reasons': exclusion_reasons
+    }
+    logger.info(f"Structured summary parsed: counts={counts} failed={len(failed)} passed={len(passed)} skipped={len(skipped)}")
+    return structured
+
+def build_summary_comment(structured, commit_sha):
+    """Create concise markdown comment from structured validation data."""
     from datetime import datetime
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-    commit_short = commit_sha[:7]
-    
-    # Initialize file lists if not provided
-    files_from_diff = files_from_diff or []
-    files_from_base = files_from_base or []
-    
-    # Determine status from file lists
-    has_diff_files = len(files_from_diff) > 0
-    has_base_files = len(files_from_base) > 0
-    
-    # No need for diff status notes since we show source info per file
-    diff_status = ""
-    
-    if result['success']:
-        # Success comment
-        files_checked = result.get('files_checked', 0)
-        emoji = "✅"
-        title = "Copyright Validation Passed"
-        
-        # Parse structured output for accurate counts
-        output = result.get('output', '')
-        invalid_count, valid_count, excluded_count = parse_validation_results(output)
-        
-        # Fail if parsing fails even on success
-        if valid_count is None:
-            error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
-            logger.error(error_msg)
-            raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
-        
-        display_count = valid_count
-        if excluded_count and excluded_count > 0:
-            summary = f"All {display_count} file{'s' if display_count != 1 else ''} passed copyright validation ({excluded_count} file{'s' if excluded_count != 1 else ''} excluded)."
-        else:
-            summary = f"All {display_count} file{'s' if display_count != 1 else ''} passed copyright validation."
-        
-        comment = f"""## {emoji} {title}
-
-{summary}{diff_status}
-
-**Commit:** `{commit_short}` | **Time:** {timestamp}
-
-### Validation Results
-
-{result.get('output', 'No detailed output available.')}
-
-<!-- copyright-validation-result: {commit_sha} -->
-"""
-    else:
-        # Failure comment
-        emoji = "❌"
-        title = "Copyright Validation Failed"
-        output = result.get('output', '')
-        
-        # Extract summary from structured output
-        files_checked = result.get('files_checked', 0)
-        invalid_count, valid_count, excluded_count = parse_validation_results(output)
-        
-        # Fail with clear error if parsing fails
-        if invalid_count is None:
-            error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
-            logger.error(error_msg)
-            raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
-            
-        logger.debug(f"Parsed validation results: invalid={invalid_count}, valid={valid_count}, excluded={excluded_count}")
-        
-        summary = f"Copyright validation failed for {invalid_count} file{'s' if invalid_count != 1 else ''}."
-        if valid_count > 0:
-            summary += f" {valid_count} file{'s' if valid_count != 1 else ''} passed."
-        
-        comment = f"""## {emoji} {title}
-
-{summary}{diff_status}
-
-**Commit:** `{commit_short}` | **Time:** {timestamp}
-
-### Validation Results
-
-{output}
-
-### 🔧 How to Fix
-
-1. **Add copyright header** to the beginning of each file
-2. **Use the expected format** shown in the validation results
-3. **Update year range** if needed (e.g., 2003-2025)
-4. **Commit and push** your changes
-
-The validation will run again automatically when you update the PR.
-
-<!-- copyright-validation-result: {commit_sha} -->
-"""
-    
-    return comment
+    ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    counts = structured['counts']
+    total = counts.get('total', 0)
+    valid = counts.get('valid', 0)
+    invalid = counts.get('invalid', 0)
+    skipped_cnt = len(structured.get('skipped', []))
+    success = invalid == 0
+    header_emoji = '✅' if success else '❌'
+    header_title = 'Copyright Validation Passed' if success else 'Copyright Validation Failed'
+    parts = [f"Total: {total}", f"Passed: {valid}", f"Failed: {invalid}"]
+    if skipped_cnt > 0:
+        parts.append(f"Skipped: {skipped_cnt}")
+    summary_line = ' | '.join(parts)
+    lines = []
+    lines.append(f"## {header_emoji} {header_title}\n")
+    lines.append(summary_line + "\n")
+    lines.append(f"**Commit:** `{commit_sha[:7]}` | **Time:** {ts}\n")
+    # Failed files
+    if structured['failed']:
+        lines.append("### Failed Files\n")
+        for f in structured['failed']:
+            annot = ''
+            if f.get('source') == 'diff':
+                annot = "\n   <sub>📝 Validated with PR changes</sub>"
+            elif f.get('source') == 'base':
+                annot = "\n   <sub>⚠️ Validated with base repository version</sub>"
+            lines.append(f"❌ **{f['file']}**{annot}")
+            if f.get('found'):
+                lines.append(f"   Found: {f['found']}")
+            if f.get('expected'):
+                lines.append(f"   Expected: {f['expected']}")
+            if f.get('error'):
+                lines.append(f"   Error: {f['error']}")
+            lines.append("")
+    # Skipped
+    if structured['skipped']:
+        lines.append("### Skipped Files\n")
+        for f in structured['skipped']:
+            annot = ''
+            if f.get('source') == 'diff':
+                annot = " <sub>📝 PR changes</sub>"
+            elif f.get('source') == 'base':
+                annot = " <sub>⚠️ base version</sub>"
+            lines.append(f"⏭️ {f['file']}{annot}")
+        lines.append("")
+    # Passed
+    if structured['passed']:
+        lines.append("### Passed Files\n")
+        for f in structured['passed']:
+            annot = ''
+            if f.get('source') == 'diff':
+                annot = " <sub>📝 PR changes</sub>"
+            elif f.get('source') == 'base':
+                annot = " <sub>⚠️ base version</sub>"
+            lines.append(f"✅ {f['file']}{annot}")
+        lines.append("")
+    if not success:
+        lines.append("### 🔧 How to Fix\n")
+        lines.append("1. Add or correct the copyright header")
+        lines.append("2. Match the Expected line shown above")
+        lines.append("3. Commit & push; validation will rerun\n")
+    lines.append(f"<!-- copyright-validation-result: {commit_sha} -->")
+    return '\n'.join(lines)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -881,22 +1030,18 @@ def webhook():
         
         # Create PR comment with detailed results
         try:
-            comment_body = format_validation_comment(result, commit_sha, validator.files_from_diff, validator.files_from_base)
-            existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
-            
-            if existing_comment_id:
-                # Update existing comment
-                update_pr_comment(access_token, repo_full_name, existing_comment_id, comment_body)
-            else:
-                # Create new comment
-                comment_url = create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
-                if comment_url:
-                    logger.info(f"PR comment created: {comment_url}")
+            structured = result.get('structured')
+            if structured:
+                comment_body = build_summary_comment(structured, commit_sha)
+                existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
+                if existing_comment_id:
+                    update_pr_comment(access_token, repo_full_name, existing_comment_id, comment_body)
                 else:
-                    logger.warning("PR comment creation failed (check if app has 'Pull requests: Write' permission)")
+                    create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
+            else:
+                logger.warning("No structured data available; skipping PR comment.")
         except Exception as e:
-            logger.error(f"Failed to create or update PR comment: {e}")
-            logger.warning("PR comment failed - continuing with status check only")
+            logger.error(f"Failed to create PR comment: {e}")
         
         logger.info(f"Copyright validation completed for PR #{pr_number}: {'PASSED' if result['success'] else 'FAILED'}")
         
