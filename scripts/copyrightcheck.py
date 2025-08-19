@@ -4,12 +4,22 @@ Copyright validation script for checking copyright headers in source files.
 
 This script validates that files contain the correct copyright header format
 based on configuration settings.
+
+Always emits at end of stdout two delimited summary blocks:
+  <<<COPYRIGHT-CHECK:JSON>>>
+  { ... json summary ... }
+  <<<END COPYRIGHT-CHECK:JSON>>>
+  <<<COPYRIGHT-CHECK:MARKDOWN>>>
+  ... markdown summary ...
+  <<<END COPYRIGHT-CHECK:MARKDOWN>>>
+No flags required.
 """
 
 import argparse
 import os
 import re
 import sys
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Set, Dict, Any
@@ -260,6 +270,88 @@ class CopyrightValidator:
             print("✅ All files have valid copyright headers!")
 
 
+def build_summary_struct(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total_files = len(results)
+    valid_files = [r for r in results if r['valid'] and not r['excluded']]
+    invalid_files = [r for r in results if not r['valid'] and not r['excluded']]
+    excluded_files = [r for r in results if r['excluded']]
+    struct = {
+        'counts': {
+            'total': total_files,
+            'valid': len(valid_files),
+            'invalid': len(invalid_files),
+            'excluded': len(excluded_files)
+        },
+        'failed': [
+            {
+                'file': r['relative_path'] if 'relative_path' in r else r['file'],
+                'found': r.get('found_copyright') or None,
+                'expected': r.get('expected_copyright') or None,
+                'error': r.get('error') or None
+            }
+            for r in invalid_files
+        ],
+        'passed': [
+            {'file': r['relative_path'] if 'relative_path' in r else r['file']}
+            for r in valid_files
+        ],
+        'skipped': [
+            {'file': r['relative_path'] if 'relative_path' in r else r['file'], 'reason': 'excluded'}
+            for r in excluded_files
+        ],
+        'generated_at': datetime.utcnow().isoformat() + 'Z'
+    }
+    return struct
+
+
+def build_markdown_summary(struct: Dict[str, Any]) -> str:
+    counts = struct['counts']
+    total = counts.get('total', 0)
+    valid = counts.get('valid', 0)
+    invalid = counts.get('invalid', 0)
+    excluded = counts.get('excluded', 0)
+    success = invalid == 0
+    header_emoji = '✅' if success else '❌'
+    header_title = 'Copyright Validation Passed' if success else 'Copyright Validation Failed'
+    parts = [f"Total: {total}", f"Passed: {valid}", f"Failed: {invalid}"]
+    if excluded:
+        parts.append(f"Skipped: {excluded}")
+    lines = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
+    if struct['failed']:
+        lines.append('### Failed Files')
+        for f in struct['failed']:
+            lines.append(f"❌ {f['file']}")
+            if f.get('found'): lines.append(f"   Found: {f['found']}")
+            if f.get('expected'): lines.append(f"   Expected: {f['expected']}")
+            if f.get('error'): lines.append(f"   Error: {f['error']}")
+            lines.append('')
+    if struct['skipped']:
+        lines.append('### Skipped Files')
+        for f in struct['skipped']:
+            lines.append(f"⏭️ {f['file']}")
+        lines.append('')
+    if struct['passed']:
+        lines.append('### Passed Files')
+        for f in struct['passed']:
+            lines.append(f"✅ {f['file']}")
+        lines.append('')
+    if not success:
+        lines.append('### Fix Guidance')
+        lines.append('Update headers to match Expected line above; then push changes.')
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+def emit_summary_blocks(struct: Dict[str, Any]):
+    json_block = json.dumps(struct, indent=2, sort_keys=True)
+    md_block = build_markdown_summary(struct)
+    print('<<<COPYRIGHT-CHECK:JSON>>>')
+    print(json_block)
+    print('<<<END COPYRIGHT-CHECK:JSON>>>')
+    print('<<<COPYRIGHT-CHECK:MARKDOWN>>>')
+    print(md_block, end='')
+    print('<<<END COPYRIGHT-CHECK:MARKDOWN>>>')
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
@@ -350,8 +442,11 @@ Examples:
     # Print results (always verbose)
     validator.print_results(results)
     
+    struct = build_summary_struct(results)
+    emit_summary_blocks(struct)
+    
     # Exit with error code if any files are invalid
-    invalid_count = sum(1 for r in results if not r['valid'] and not r['excluded'])
+    invalid_count = struct['counts'].get('invalid', 0)
     if invalid_count > 0:
         sys.exit(1)
 
