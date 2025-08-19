@@ -18,6 +18,7 @@ import subprocess
 import shutil
 from pathlib import Path
 import base64
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -667,27 +668,36 @@ def update_pr_comment(access_token, repo_full_name, comment_id, comment_body):
         return None
 
 def parse_validation_stdout(stdout_text, base_repo_dir, files_from_diff, files_from_base):
-    """Parse stdout from copyrightcheck.py into structured summary.
-    Does not rely on emoji branching logic; uses headings and patterns.
-    Returns structured dict or raises on fatal parsing errors.
+    """Parse stdout into structured data without relying on emoji/symbol markers.
+    Logic:
+      1. Capture summary counts from lines starting with the exact headings.
+      2. Collect exclusion reasons from lines beginning with 'Excluding ...'.
+      3. Identify the detailed invalid file blocks between the summary counts and the next section heading
+         ('Excluded files:' or 'Valid files:'). A path line is any line containing base_repo_dir that is
+         not a summary/heading and not a Found/Expected/Error line.
+      4. Parse Found:/Expected:/Error: lines following each path until blank line or next path line.
+      5. Collect excluded and valid file absolute paths from their respective sections using only the
+         heading text plus presence of base_repo_dir in subsequent lines (ignore emojis/prefix chars).
+      6. Derive passed (valid not excluded/failed) and skipped (excluded due to config exact/pattern)
+         lists. Determine source (diff/base) from provided lists.
     """
     lines = stdout_text.splitlines()
-    counts = { 'total': 0, 'valid': 0, 'invalid': 0, 'excluded': 0 }
-    exclusion_reasons = {}  # relative_path -> reason (dotfile | config:exact | config:pattern)
+    counts = {'total': 0, 'valid': 0, 'invalid': 0, 'excluded': 0}
+    exclusion_reasons = {}
 
-    # First pass: counts + exclusion reason lines
+    # 1. Summary counts & exclusion reasons
     for raw in lines:
         t = raw.strip()
         if t.startswith('Total files checked:'):
             try: counts['total'] = int(t.split(':',1)[1].strip())
             except: pass
-        elif t.startswith('Valid files:'):
+        elif t.startswith('Valid files:') and re.match(r'^Valid files:\s+\d+$', t):
             try: counts['valid'] = int(t.split(':',1)[1].strip())
             except: pass
-        elif t.startswith('Invalid files:'):
+        elif t.startswith('Invalid files:') and re.match(r'^Invalid files:\s+\d+$', t):
             try: counts['invalid'] = int(t.split(':',1)[1].strip())
             except: pass
-        elif t.startswith('Excluded files:'):
+        elif t.startswith('Excluded files:') and re.match(r'^Excluded files:\s+\d+$', t):
             try: counts['excluded'] = int(t.split(':',1)[1].strip())
             except: pass
         elif 'Excluding dotfile:' in t:
@@ -702,100 +712,107 @@ def parse_validation_stdout(stdout_text, base_repo_dir, files_from_diff, files_f
             rel = part.split('matches',1)[0].strip()
             exclusion_reasons[rel] = 'config:pattern'
 
-    # Sections
-    def find_index(prefix):
-        for i,l in enumerate(lines):
-            if l.strip().startswith(prefix):
-                return i
-        return -1
-    excluded_idx = find_index('Excluded files:')
-    valid_idx = find_index('Valid files:')
+    # Helper functions
+    def is_heading(s):
+        return s in ('Excluded files:', 'Valid files:')
 
-    # Collect excluded absolute paths
-    excluded_abs = []
-    if excluded_idx != -1:
-        for l in lines[excluded_idx+1:]:
-            s = l.strip()
-            if not s or s.startswith('Valid files:'):
-                break
-            # Path after first '/'
-            if '/' in s:
-                p = s[s.index('/') : ].strip()
-                excluded_abs.append(p)
-    # Collect valid absolute paths
-    valid_abs = []
-    if valid_idx != -1:
-        for l in lines[valid_idx+1:]:
-            s = l.strip()
-            if not s:
-                break
-            if '/' in s:
-                p = s[s.index('/') : ].strip()
-                valid_abs.append(p)
+    def is_summary_line(s):
+        return bool(re.match(r'^(Total files checked|Valid files|Invalid files|Excluded files):\s+\d+$', s))
 
-    # Collect invalid blocks (between summary and Excluded section)
-    # Determine region end
-    region_end = excluded_idx if excluded_idx != -1 else (valid_idx if valid_idx != -1 else len(lines))
-    invalid_blocks = []
-    current_path = None
-    current_found = None
-    current_expected = None
-    current_error = None
+    def extract_abs_path(line):
+        if base_repo_dir in line:
+            # Extract from first occurrence of base_repo_dir
+            idx = line.index(base_repo_dir)
+            return line[idx:].strip()
+        return None
+
+    # 2. Locate the region containing invalid file details
+    # Find first blank line AFTER the summary block (which ends at first blank after all four counts encountered)
+    counts_found = 0
+    summary_end_idx = 0
     for i, raw in enumerate(lines):
-        if i >= region_end:
+        s = raw.strip()
+        if is_summary_line(s):
+            counts_found += 1
+        elif counts_found >= 1 and s == '':
+            summary_end_idx = i
             break
-        t = raw.rstrip('\n')
-        s = t.strip()
-        if not s:
-            # blank resets pending block
-            current_path = None
-            current_found = current_expected = current_error = None
-            continue
-        # Skip headings and summary lines
-        if s.startswith('Total files checked:') or s.startswith('Valid files:') or s.startswith('Invalid files:') or s.startswith('Excluded files:'):
-            continue
-        if s.startswith('Expected:') or s.startswith('Found:') or s.startswith('Error:'):
-            # Should have a current_path
-            if current_path is None:
-                continue
-            if s.startswith('Found:'):
-                current_found = s.split('Found:',1)[1].strip()
-            elif s.startswith('Expected:'):
-                current_expected = s.split('Expected:',1)[1].strip()
-            elif s.startswith('Error:'):
-                current_error = s.split('Error:',1)[1].strip()
-            # If we have expected we can treat as complete (expected line always printed for invalid)
-            if current_expected is not None:
-                invalid_blocks.append({
-                    'abs_path': current_path,
-                    'found': current_found,
-                    'expected': current_expected,
-                    'error': current_error
-                })
-            continue
-        # Potential path line (contains '/' ) and not a heading
-        if '/' in s:
-            # Extract substring from first '/'
-            path_candidate = s[s.index('/') : ]
-            current_path = path_candidate
-            current_found = current_expected = current_error = None
+    # If not broken, start scanning after summary_end_idx anyway
+    detail_region_end = len(lines)
+    for j in range(summary_end_idx+1, len(lines)):
+        if lines[j].strip() in ('Excluded files:', 'Valid files:'):
+            detail_region_end = j
+            break
 
-    # Helper: convert absolute path to relative repo root path
+    # 3. Parse invalid blocks
+    failed_blocks = []
+    i = summary_end_idx + 1
+    while i < detail_region_end:
+        line = lines[i]
+        s = line.strip()
+        if not s or is_heading(s) or is_summary_line(s):
+            i += 1
+            continue
+        abs_path = extract_abs_path(line)
+        if abs_path:
+            found = expected = error = None
+            j = i + 1
+            while j < detail_region_end:
+                nxt = lines[j].rstrip('\n')
+                t = nxt.strip()
+                if not t:
+                    break
+                if extract_abs_path(nxt) and not t.startswith(('Found:', 'Expected:', 'Error:')):
+                    break  # next file block
+                if t.startswith('Found:'):
+                    found = t.split('Found:',1)[1].strip()
+                elif t.startswith('Expected:'):
+                    expected = t.split('Expected:',1)[1].strip()
+                elif t.startswith('Error:'):
+                    error = t.split('Error:',1)[1].strip()
+                j += 1
+            failed_blocks.append({'abs_path': abs_path, 'found': found, 'expected': expected, 'error': error})
+            i = j
+        else:
+            i += 1
+
+    # 4. Collect excluded and valid paths from their sections
+    def collect_section_paths(heading):
+        paths = []
+        collecting = False
+        for raw in lines:
+            s = raw.strip()
+            if s == heading:
+                collecting = True
+                continue
+            if collecting:
+                if s == '' or is_heading(s) or is_summary_line(s):
+                    if s == '' or s == 'Valid files:':
+                        collecting = False
+                    if s == 'Valid files:' and heading == 'Excluded files:':
+                        # continue collecting valid separately later
+                        pass
+                    if not collecting:
+                        continue
+                abs_path = extract_abs_path(raw)
+                if abs_path:
+                    paths.append(abs_path)
+        return paths
+
+    excluded_abs = collect_section_paths('Excluded files:')
+    valid_abs = collect_section_paths('Valid files:')
+
+    # 5. Convert absolute to relative
     def to_rel(p):
         if not p:
             return p
-        # base_repo_dir e.g. /tmp/tmpxyz/base_repo
         if p.startswith(base_repo_dir):
             rel = p[len(base_repo_dir):]
-            if rel.startswith('/'):
-                rel = rel[1:]
-            return rel
-        # Remove leading slash for cleanliness
+            return rel[1:] if rel.startswith('/') else rel
         return p.lstrip('/')
 
-    # Build failed list
     failed = []
-    for blk in invalid_blocks:
+    for blk in failed_blocks:
         rel = to_rel(blk['abs_path'])
         source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
         failed.append({
@@ -806,27 +823,23 @@ def parse_validation_stdout(stdout_text, base_repo_dir, files_from_diff, files_f
             'source': source
         })
 
-    # Passed list (exclude invalid and excluded)
-    invalid_set = {f['file'] for f in failed}
     excluded_rel_all = [to_rel(p) for p in excluded_abs]
     excluded_set = set(excluded_rel_all)
+    invalid_set = {f['file'] for f in failed}
 
     passed = []
     for p in valid_abs:
         rel = to_rel(p)
         if rel not in invalid_set and rel not in excluded_set:
             source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
-            passed.append({ 'file': rel, 'source': source })
+            passed.append({'file': rel, 'source': source})
 
-    # Skipped (config only)
     skipped = []
-    skipped_rel = []
     for rel in excluded_rel_all:
         reason = exclusion_reasons.get(rel)
         if reason and reason.startswith('config:'):
-            skipped_rel.append(rel)
             source = 'diff' if rel in files_from_diff else ('base' if rel in files_from_base else None)
-            skipped.append({ 'file': rel, 'source': source, 'reason': reason })
+            skipped.append({'file': rel, 'source': source, 'reason': reason})
 
     structured = {
         'counts': counts,
@@ -835,6 +848,8 @@ def parse_validation_stdout(stdout_text, base_repo_dir, files_from_diff, files_f
         'skipped': skipped,
         'exclusion_reasons': exclusion_reasons
     }
+    if counts.get('invalid',0) > 0 and not failed:
+        logger.warning('Parsed invalid count > 0 but no failed file details captured; output format may have changed.')
     logger.info(f"Structured summary parsed: counts={counts} failed={len(failed)} passed={len(passed)} skipped={len(skipped)}")
     return structured
 
