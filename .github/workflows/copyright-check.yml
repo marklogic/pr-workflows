@@ -127,6 +127,7 @@ jobs:
     - name: Validate
       id: validate
       if: steps.changed-files.outputs.skip-validation != 'true'
+      continue-on-error: true
       run: |
         set -o pipefail
         echo "Starting copyright validation..."
@@ -181,7 +182,7 @@ jobs:
         fi
     
     - name: Job Summary (Markdown block extraction)
-      if: steps.changed-files.outputs.skip-validation != 'true'
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
         summary_file="$GITHUB_STEP_SUMMARY"
         if [ ! -f validation_output.txt ]; then
@@ -190,14 +191,47 @@ jobs:
         fi
         awk '/^<<<COPYRIGHT-CHECK:MARKDOWN>>>/{flag=1;next}/^<<<END COPYRIGHT-CHECK:MARKDOWN>>>/{flag=0}flag' validation_output.txt >> "$summary_file"
     
+    - name: Annotate Summary
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      run: |
+        python3 - <<'PY'
+import re, json, pathlib
+text = pathlib.Path('validation_output.txt').read_text()
+# Exact block extraction (no fallback parsing)
+m = re.search(r'<<<COPYRIGHT-CHECK:JSON>>>\s*(.*?)\s*<<<END COPYRIGHT-CHECK:JSON>>>', text, re.S)
+if not m:
+    # No annotation if block missing (no fallback)
+    raise SystemExit(0)
+js = json.loads(m.group(1))
+counts = js.get('counts', {})
+failed = counts.get('invalid', 0)
+summary_parts = [
+    f"Total {counts.get('total',0)}",
+    f"Passed {counts.get('valid',0)}",
+    f"Failed {failed}"
+]
+skipped = counts.get('excluded',0)
+if skipped:
+    summary_parts.append(f"Skipped {skipped}")
+summary_line = ' | '.join(summary_parts)
+if failed > 0:
+    print(f"::error title=Copyright Summary::{summary_line}")
+    failed_files = js.get('failed', [])
+    if failed_files:
+        # Truncate list to first 10
+        display = failed_files[:10]
+        listing = ', '.join(f['file'] for f in display)
+        extra = '' if len(failed_files) <= 10 else f" (+{len(failed_files)-10} more)"
+        print(f"::error title=Failed Files::{listing}{extra}")
+else:
+    print(f"::notice title=Copyright Summary::{summary_line}")
+PY
+    
     - name: Fail if needed
-      if: steps.changed-files.outputs.skip-validation != 'true'
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
         if [ "${{ steps.validate.outputs.status }}" != "success" ]; then
-          echo "::error title=Copyright Check Failed::Some files invalid"
           exit 1
-        else
-          echo "::notice title=Copyright Check Passed::All files valid"
         fi
     
     - name: No-op summary
