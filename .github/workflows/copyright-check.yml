@@ -83,22 +83,83 @@ jobs:
       run: |
         python3 - <<'PY'
         import re, sys
+        from textwrap import shorten
         md=open('summary.md').read()
-        lines=[l for l in md.splitlines() if l.strip()]
-        if len(lines)<2:
-            sys.exit(0)
-        counts_line=lines[1]
+        lines=[l.rstrip('\n') for l in md.splitlines()]
+        # Extract counts
+        counts_line=None
+        for l in lines:
+            if l.startswith('Total:') or l.startswith('Total '):
+                counts_line=l
+                break
+        if not counts_line and len([l for l in lines if l.strip()])>=2:
+            counts_line=[l for l in lines if l.strip()][1]
         pat=r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
-        m=re.search(pat, counts_line)
-        if not m:
-            sys.exit(0)
-        Total,Passed,Failed,Skipped=m.groups()
-        Total=int(Total); Passed=int(Passed); Failed=int(Failed); Skipped=int(Skipped) if Skipped else 0
-        summary=f"Total {Total} | Passed {Passed} | Failed {Failed}" + (f" | Skipped {Skipped}" if Skipped else '')
-        if Failed>0:
+        m=re.search(pat, counts_line or '')
+        counts={'total':0,'valid':0,'invalid':0,'excluded':0}
+        if m:
+            counts['total']=int(m.group(1)); counts['valid']=int(m.group(2)); counts['invalid']=int(m.group(3)); counts['excluded']=int(m.group(4) or 0 if m.lastindex>=4 else 0)
+        # Parse sections
+        section=None
+        failed=[]; skipped=[]; passed=[]
+        current_fail=None
+        for l in lines:
+            ls=l.strip()
+            if ls.startswith('### '):
+                if 'Failed Files' in ls: section='failed'
+                elif 'Skipped Files' in ls: section='skipped'
+                elif 'Passed Files' in ls: section='passed'
+                else: section=None
+                continue
+            if not ls:
+                if section=='failed' and current_fail:
+                    failed.append(current_fail); current_fail=None
+                continue
+            if section=='failed':
+                if ls.startswith('❌ '):
+                    if current_fail: failed.append(current_fail)
+                    current_fail={'file': ls[2:].strip(), 'found':None,'expected':None,'error':None}
+                elif ls.startswith('Found:') and current_fail:
+                    current_fail['found']=ls[len('Found:'):].strip()
+                elif ls.startswith('Expected:') and current_fail:
+                    current_fail['expected']=ls[len('Expected:'):].strip()
+                elif ls.startswith('Error:') and current_fail:
+                    current_fail['error']=ls[len('Error:'):].strip()
+            elif section=='skipped' and ls.startswith('⏭️ '):
+                skipped.append(ls[2:].strip())
+            elif section=='passed' and ls.startswith('✅ '):
+                passed.append(ls[2:].strip())
+        if section=='failed' and current_fail:
+            failed.append(current_fail)
+        # Build summary annotation
+        summary=f"Total {counts['total']} | Passed {counts['valid']} | Failed {counts['invalid']}" + (f" | Skipped {counts['excluded']}" if counts['excluded'] else '')
+        if counts['invalid']>0:
             print(f"::error title=Copyright Summary::{summary}")
         else:
             print(f"::notice title=Copyright Summary::{summary}")
+        # Failed file annotations (limit to 20 to avoid noise)
+        for f in failed[:20]:
+            details=[]
+            if f.get('found'): details.append(f"Found={shorten(f['found'], width=140, placeholder='…')}")
+            if f.get('expected'): details.append(f"Expected={shorten(f['expected'], width=140, placeholder='…')}")
+            if f.get('error'): details.append(f"Error={shorten(f['error'], width=140, placeholder='…')}")
+            detail_str=' | '.join(details)
+            print(f"::error title=Invalid:{f['file']}::{detail_str}")
+        more=len(failed)-len(failed[:20])
+        if more>0:
+            print(f"::error title=Invalid (truncated)::+{more} more invalid files not listed")
+        # Skipped files annotation
+        if skipped:
+            sk_list= ', '.join(skipped[:30])
+            more=len(skipped)-len(skipped[:30])
+            if more>0: sk_list += f" (+{more} more)"
+            print(f"::notice title=Skipped Files::{sk_list}")
+        # Passed files annotation (only if no failures to reduce noise)
+        if passed and not failed:
+            p_list=', '.join(passed[:30])
+            more=len(passed)-len(passed[:30])
+            if more>0: p_list+=f" (+{more} more)"
+            print(f"::notice title=Passed Files::{p_list}")
         PY
 
     - name: Fail if needed
