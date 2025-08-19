@@ -82,24 +82,24 @@ jobs:
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
         python3 - <<'PY'
-import re, sys
-md=open('summary.md').read()
-lines=[l for l in md.splitlines() if l.strip()]
-if len(lines)<2:
-    sys.exit(0)
-counts_line=lines[1]
-pat=r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
-m=re.search(pat, counts_line)
-if not m:
-    sys.exit(0)
-Total,Passed,Failed,Skipped=m.groups()
-Total=int(Total); Passed=int(Passed); Failed=int(Failed); Skipped=int(Skipped) if Skipped else 0
-summary=f"Total {Total} | Passed {Passed} | Failed {Failed}" + (f" | Skipped {Skipped}" if Skipped else '')
-if Failed>0:
-    print(f"::error title=Copyright Summary::{summary}")
-else:
-    print(f"::notice title=Copyright Summary::{summary}")
-PY
+        import re, sys
+        md=open('summary.md').read()
+        lines=[l for l in md.splitlines() if l.strip()]
+        if len(lines)<2:
+            sys.exit(0)
+        counts_line=lines[1]
+        pat=r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
+        m=re.search(pat, counts_line)
+        if not m:
+            sys.exit(0)
+        Total,Passed,Failed,Skipped=m.groups()
+        Total=int(Total); Passed=int(Passed); Failed=int(Failed); Skipped=int(Skipped) if Skipped else 0
+        summary=f"Total {Total} | Passed {Passed} | Failed {Failed}" + (f" | Skipped {Skipped}" if Skipped else '')
+        if Failed>0:
+            print(f"::error title=Copyright Summary::{summary}")
+        else:
+            print(f"::notice title=Copyright Summary::{summary}")
+        PY
 
     - name: Fail if needed
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
