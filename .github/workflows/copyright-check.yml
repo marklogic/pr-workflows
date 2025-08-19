@@ -7,6 +7,9 @@ jobs:
   copyright-check:
     name: Validate Copyright Headers
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
     - name: Checkout PR head
@@ -76,17 +79,49 @@ jobs:
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       run: |
         awk '/^<<<COPYRIGHT-CHECK:MARKDOWN>>>/{f=1;next}/^<<<END COPYRIGHT-CHECK:MARKDOWN>>>/{f=0}f' validation_output.txt > summary.md
+        echo '----- BEGIN COPYRIGHT SUMMARY (also in Job Summary) -----'
+        cat summary.md
+        echo '----- END COPYRIGHT SUMMARY -----'
         cat summary.md >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Annotations (from markdown)
+    - name: Post / Update PR comment with summary
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
-      run: |
-        # Determine annotation level based on validation status
-        STATUS="${{ steps.validate.outputs.status }}"
-        if [ "$STATUS" = "success" ]; then LEVEL=notice; else LEVEL=error; fi
-        # Encode summary.md content for annotation (escape %, CR, LF)
-        content=$(sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' summary.md)
-        echo "::${LEVEL} title=Copyright Validation Summary::${content}" 
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          if (!context.payload.pull_request) {
+            core.info('No pull_request in context, skipping comment.');
+            return;
+          }
+          const mdRaw = fs.readFileSync('summary.md','utf8');
+          const sha = context.payload.pull_request.head.sha;
+          const md = mdRaw.endsWith('\n') ? mdRaw + `_Commit: ${sha}_` : mdRaw + `\n_Commit: ${sha}_`;
+          const number = context.payload.pull_request.number;
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: number,
+            per_page: 100
+          });
+          const existing = comments.find(c => c.body.startsWith('## ✅ Copyright Validation') || c.body.startsWith('## ❌ Copyright Validation'));
+          if (existing) {
+            core.info(`Updating existing summary comment ${existing.id}`);
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body: md
+            });
+          } else {
+            core.info('Creating new summary comment');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body: md
+            });
+          }
 
     - name: Fail if needed
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
