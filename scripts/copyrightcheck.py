@@ -33,7 +33,7 @@ class CopyrightValidator:
             self.excluded_files = set()
         else:
             self.excluded_files = set(excluded_files_list)
-        
+    
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         """Load configuration from plain text file."""
         config = {}
@@ -234,8 +234,8 @@ class CopyrightValidator:
         
         return results
     
-    def print_results(self, results: List[Dict[str, Any]], verbose: bool = False):
-        """Print validation results."""
+    def print_results(self, results: List[Dict[str, Any]]):
+        """Print validation results (always verbose)."""
         total_files = len(results)
         valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
@@ -262,21 +262,20 @@ class CopyrightValidator:
                 print(f"   Expected: {result['expected_copyright']}")
                 print()
         
-        # Print excluded files if verbose
-        if verbose and excluded_files > 0:
+        # Always print excluded files (verbose mode always on)
+        if excluded_files > 0:
             print("Excluded files:")
             for result in results:
                 if result['excluded']:
                     print(f"⏭️  {result['file']}")
             print()
         
-        # Print valid files if verbose
-        if verbose:
-            print("Valid files:")
-            for result in results:
-                if result['valid'] and not result['excluded']:
-                    print(f"✅ {result['file']}")
-            print()
+        # Always print valid files (verbose mode always on)
+        print("Valid files:")
+        for result in results:
+            if result['valid'] and not result['excluded']:
+                print(f"✅ {result['file']}")
+        print()
         
         if not has_invalid:
             print("✅ All files have valid copyright headers!")
@@ -316,12 +315,6 @@ Examples:
         '--files-from-stdin',
         action='store_true',
         help='Read file paths from standard input (one per line)'
-    )
-    
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help='Show detailed output including valid and excluded files'
     )
     
     args = parser.parse_args()
@@ -375,8 +368,8 @@ Examples:
     # Validate files using absolute paths for file ops, relative for exclusion
     results = validator.validate_files(absolute_file_paths, relative_file_paths)
     
-    # Print results
-    validator.print_results(results, verbose=args.verbose)
+    # Print results (always verbose)
+    validator.print_results(results)
     
     # Exit with error code if any files are invalid
     invalid_count = sum(1 for r in results if not r['valid'] and not r['excluded'])
