@@ -877,12 +877,11 @@ def build_summary_comment(structured, commit_sha):
     if structured['failed']:
         lines.append("### Failed Files\n")
         for f in structured['failed']:
-            annot = ''
+            lines.append(f"❌ **{f['file']}**")
             if f.get('source') == 'diff':
-                annot = "\n   <sub>📝 Validated with PR changes</sub>"
+                lines.append("   <sub>📝 Validated with PR changes</sub>")
             elif f.get('source') == 'base':
-                annot = "\n   <sub>⚠️ Validated with base repository version</sub>"
-            lines.append(f"❌ **{f['file']}**{annot}")
+                lines.append("   <sub>⚠️ Validated with base repository version</sub>")
             if f.get('found'):
                 lines.append(f"   Found: {f['found']}")
             if f.get('expected'):
@@ -894,23 +893,21 @@ def build_summary_comment(structured, commit_sha):
     if structured['skipped']:
         lines.append("### Skipped Files\n")
         for f in structured['skipped']:
-            annot = ''
+            lines.append(f"⏭️ {f['file']}")
             if f.get('source') == 'diff':
-                annot = " <sub>📝 PR changes</sub>"
+                lines.append("   <sub>📝 Validated with PR changes</sub>")
             elif f.get('source') == 'base':
-                annot = " <sub>⚠️ base version</sub>"
-            lines.append(f"⏭️ {f['file']}{annot}")
+                lines.append("   <sub>⚠️ Validated with base repository version</sub>")
         lines.append("")
     # Passed
     if structured['passed']:
         lines.append("### Passed Files\n")
         for f in structured['passed']:
-            annot = ''
+            lines.append(f"✅ {f['file']}")
             if f.get('source') == 'diff':
-                annot = " <sub>📝 PR changes</sub>"
+                lines.append("   <sub>📝 Validated with PR changes</sub>")
             elif f.get('source') == 'base':
-                annot = " <sub>⚠️ base version</sub>"
-            lines.append(f"✅ {f['file']}{annot}")
+                lines.append("   <sub>⚠️ Validated with base repository version</sub>")
         lines.append("")
     if not success:
         lines.append("### 🔧 How to Fix\n")
