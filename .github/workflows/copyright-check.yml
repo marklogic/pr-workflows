@@ -124,10 +124,11 @@ jobs:
           echo "skip-validation=false" >> $GITHUB_OUTPUT
         fi
     
-    - name: Validate copyright headers
+    - name: Validate
       id: validate
       if: steps.changed-files.outputs.skip-validation != 'true'
       run: |
+        set -o pipefail
         echo "Starting copyright validation..."
         
         # Debug: List current directory contents
@@ -170,7 +171,7 @@ jobs:
         echo "Running copyright validation..."
         echo "🔧 Command: python3 $script_path --config $config_file --working-dir target-repo $files_to_check"
         
-        if python3 "$script_path" --config "$config_file" --working-dir target-repo $files_to_check; then
+        if python3 "$script_path" --config "$config_file" --working-dir target-repo $files_to_check > validation_output.txt 2>&1; then
           echo "✅ Copyright validation passed"
           echo "status=success" >> $GITHUB_OUTPUT
         else
@@ -179,19 +180,104 @@ jobs:
           exit 1
         fi
     
+    - name: Detailed Summary
+      if: steps.changed-files.outputs.skip-validation != 'true'
+      run: |
+        python3 - <<'PY'
+import re, os
+summary_file = os.environ.get('GITHUB_STEP_SUMMARY')
+out_path = 'validation_output.txt'
+if not os.path.exists(out_path):
+    with open(summary_file,'a') as s: s.write("No validation output captured.\n")
+    raise SystemExit(0)
+with open(out_path,'r') as f:
+    lines = f.read().splitlines()
+counts={'total':0,'valid':0,'invalid':0,'excluded':0}
+for line in lines:
+    t=line.strip()
+    for key,label in [('Total files checked','total'),('Valid files','valid'),('Invalid files','invalid'),('Excluded files','excluded')]:
+        if t.startswith(key+':'):
+            try: counts[label]=int(t.split(':',1)[1].strip())
+            except: pass
+# Collect sections
+def collect_after(header):
+    res=[]; active=False
+    for l in lines:
+        s=l.strip()
+        if s==header:
+            active=True; continue
+        if active:
+            if not s: break
+            if s.endswith(':') and s in ('Excluded files:','Valid files:'): break
+            if '/' in s:
+                path=s[s.index('/'):]  # from first slash
+                res.append(path.strip())
+    return res
+excluded = collect_after('Excluded files:')
+valid_sec = collect_after('Valid files:')
+# Invalid blocks
+invalid=[]
+i=0
+n=len(lines)
+while i<n:
+    s=lines[i].strip()
+    if '/' in s and not any(s.startswith(h) for h in ('Total files checked','Valid files:','Invalid files:','Excluded files:')) and 'Validation Results' not in s:
+        path = s[s.index('/'):] if '/' in s else None
+        found=expected=error=None
+        j=i+1
+        while j<n:
+            t=lines[j].strip()
+            if not t: break
+            if t.startswith('Found:'): found=t.split('Found:',1)[1].strip()
+            elif t.startswith('Expected:'): expected=t.split('Expected:',1)[1].strip()
+            elif t.startswith('Error:'): error=t.split('Error:',1)[1].strip()
+            elif '/' in t and t.split('/',1)[0].strip()=='' and expected: break
+            j+=1
+        if path and expected:
+            invalid.append({'file':path,'found':found,'expected':expected,'error':error})
+            i=j; continue
+    i+=1
+# Deduplicate
+seen=set(); uniq=[]
+for item in invalid:
+    if item['file'] not in seen:
+        uniq.append(item); seen.add(item['file'])
+invalid=uniq
+success = counts.get('invalid',0)==0
+header = '## ✅ Copyright Validation Passed' if success else '## ❌ Copyright Validation Failed'
+parts=[f"Total: {counts['total']}", f"Passed: {counts['valid']}", f"Failed: {counts['invalid']}"]
+if counts.get('excluded'): parts.append(f"Skipped: {counts['excluded']}")
+md=[header,' | '.join(parts),'']
+if invalid:
+    md.append('### Failed Files')
+    for f in invalid:
+        md.append(f"❌ `{f['file']}`")
+        if f.get('found'): md.append(f"   Found: {f['found']}")
+        if f.get('expected'): md.append(f"   Expected: {f['expected']}")
+        if f.get('error'): md.append(f"   Error: {f['error']}")
+        md.append('')
+if excluded:
+    md.append('### Skipped Files')
+    for f in excluded: md.append(f"⏭️ `{f}`")
+    md.append('')
+if valid_sec:
+    md.append('### Passed Files')
+    for f in valid_sec: md.append(f"✅ `{f}`")
+    md.append('')
+if not success:
+    md.append('### Fix Guidance')
+    md.append('Update headers to match Expected line above; then push changes.')
+with open(summary_file,'a') as s:
+    s.write('\n'.join(md)+'\n')
+PY
+    
     - name: Summary
       if: always()
       run: |
-        files_count="${{ steps.changed-files.outputs.files-count }}"
-        
         if [ "${{ steps.changed-files.outputs.skip-validation }}" = "true" ]; then
-          echo "ℹ️ No files to validate - skipped copyright check"
-          echo "::notice title=Copyright Check::No files changed or all files excluded"
+          echo "::notice title=Copyright Check::No files to validate"
         elif [ "${{ steps.validate.outputs.status }}" = "success" ]; then
-          echo "✅ Copyright validation completed successfully"
-          echo "::notice title=Copyright Check Passed::All $files_count changed files have valid copyright headers"
+          echo "::notice title=Copyright Check Passed::All files valid"
         else
-          echo "❌ Copyright validation failed"
-          echo "::error title=Copyright Check Failed::Some of the $files_count changed files have invalid or missing copyright headers. Check the logs above for details."
-          exit 1
+          echo "::error title=Copyright Check Failed::Some files invalid"; exit 1
         fi
