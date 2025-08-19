@@ -7,7 +7,6 @@ using direct API calls (no PyGithub dependency for GHES compatibility).
 """
 
 import os
-import json
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import tempfile
@@ -17,7 +16,6 @@ import jwt
 import time
 import subprocess
 import shutil
-from pathlib import Path
 import base64
 import re
 
@@ -1016,19 +1014,26 @@ def webhook():
         
         # Create status check based on results
         if result['success']:
-            # Parse structured output for accurate counts
-            output = result.get('output', '')
-            invalid_count, valid_count, excluded_count = parse_validation_results(output)
-            
-            # Use parsed valid count if available, otherwise fall back to files_checked
-            if valid_count is not None:
+            structured = result.get('structured')
+            if structured:
+                counts = structured.get('counts', {})
+                valid_count = counts.get('valid')
+                excluded_count = counts.get('excluded')
                 description = f"Copyright validation passed ({valid_count} files valid"
-                if excluded_count and excluded_count > 0:
+                if excluded_count:
                     description += f", {excluded_count} excluded"
                 description += ")"
             else:
-                description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
-                
+                # Fallback to legacy simple parsing
+                output = result.get('output', '')
+                invalid_count, valid_count, excluded_count = parse_validation_results(output)
+                if valid_count is not None:
+                    description = f"Copyright validation passed ({valid_count} files valid"
+                    if excluded_count:
+                        description += f", {excluded_count} excluded"
+                    description += ")"
+                else:
+                    description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
             create_status_check(
                 access_token,
                 repo_full_name,
@@ -1037,25 +1042,20 @@ def webhook():
                 description
             )
         else:
-            # Parse invalid file count from structured output
-            output = result.get('output', '')
-            invalid_count, valid_count, excluded_count = parse_validation_results(output)
-            
-            # Fail if parsing fails
-            if invalid_count is None:
-                error_msg = f"Failed to parse structured output from copyright validation script. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
-                logger.error(error_msg)
-                raise Exception(f"Copyright validation script output parsing failed. Unable to determine file counts from validation results.")
-            
-            display_count = invalid_count
-            
-            # Ensure we have at least 1 if we're in failure state
-            if display_count == 0:
-                display_count = 1
-            
-            # Debug: log the counting
+            structured = result.get('structured')
+            if structured:
+                counts = structured.get('counts', {})
+                invalid_count = counts.get('invalid', 0)
+                display_count = invalid_count or 1
+            else:
+                output = result.get('output', '')
+                invalid_count, valid_count, excluded_count = parse_validation_results(output)
+                if invalid_count is None:
+                    error_msg = f"Failed to parse output. Raw output:\n{output[:500]}{'...' if len(output) > 500 else ''}"
+                    logger.error(error_msg)
+                    raise Exception("Copyright validation script output parsing failed.")
+                display_count = invalid_count or 1
             logger.info(f"Debug - Status check invalid file count: {display_count}")
-            
             create_status_check(
                 access_token,
                 repo_full_name,

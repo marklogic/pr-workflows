@@ -33,7 +33,7 @@ jobs:
         
         # Check if config file exists in PR head
         if [ ! -f "$config_file" ]; then
-          echo "⚠️ Config file not found in PR head, checking base repository..."
+          echo "Config file not in PR head, checking base branch..."
           
           # Checkout base repository to get config file
           # Use GITHUB_TOKEN for authentication (works for both public and private repos)
@@ -43,28 +43,24 @@ jobs:
           base_config_file="base-repo/.copyrightconfig"
           
           if [ -f "$base_config_file" ]; then
-            echo "✅ Found config file in base repository"
+            echo "Using config from base repository"
             config_file="$base_config_file"
             config_source="base repository"
           else
-            echo "❌ Error: .copyrightconfig not found in PR head or base repository"
-            echo "Please ensure copyright configuration file exists in the repository"
-            exit 1
+            echo "Error: .copyrightconfig not found" && exit 1
           fi
         else
-          echo "✅ Found config file in PR head"
+          echo "Using config from PR head"
         fi
         
         # Validate config file content
         if [ ! -s "$config_file" ]; then
-          echo "❌ Error: .copyrightconfig is empty"
-          exit 1
+          echo "Error: empty config" && exit 1
         fi
         
         # Check for required startyear
         if ! grep -q "^startyear:" "$config_file"; then
-          echo "❌ Error: startyear not found in .copyrightconfig"
-          exit 1
+          echo "Error: startyear missing" && exit 1
         fi
         
         echo "✅ Using copyright configuration from $config_source"
@@ -89,17 +85,15 @@ jobs:
         cd target-repo
         
         # Get the base and head refs for comparison
-        base_ref="${{ github.event.pull_request.base.ref || 'main' }}"
         base_sha="${{ github.event.pull_request.base.sha }}"
         head_sha="${{ github.event.pull_request.head.sha }}"
         
         echo "Getting changes introduced by the PR..."
-        echo "Base ref: $base_ref"
         echo "Base SHA: $base_sha"
         echo "Head SHA: $head_sha"
         
         # Fetch the base branch to compare against
-        git fetch origin "$base_ref"
+        git fetch origin ${{ github.event.pull_request.base.ref }}
         
         # Get files changed between base and PR head
         changed_files=$(git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha")
@@ -115,19 +109,8 @@ jobs:
         echo "$changed_files"
         
         # Filter existing files and create list for validation
-        existing_count=0
-        
-        echo "$changed_files" | while IFS= read -r file; do
-          if [ -f "$file" ]; then
-            echo "✓ Will validate: $file"
-            existing_count=$((existing_count + 1))
-          else
-            echo "⚠ Skipping (deleted): $file"
-          fi
-        done
-        
-        # Count existing files
-        existing_count=$(echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' | wc -l)
+        echo "$changed_files" | xargs -I {} sh -c '[ -f "{}" ] && echo "{}"' > ../files_to_check.txt
+        existing_count=$(cat ../files_to_check.txt | wc -l | tr -d ' ')
         
         if [ "$existing_count" -eq 0 ]; then
           echo "No existing files to validate (all files were deleted)"
@@ -180,7 +163,7 @@ jobs:
           exit 1
         fi
         
-        files_to_check=$(cat files_to_check.txt | tr '\n' ' ')
+        files_to_check=$(tr '\n' ' ' < files_to_check.txt)
         echo "Validating files: $files_to_check"
         
         # Run validation (script always verbose now)

@@ -1,24 +1,21 @@
 FROM python:3.11-slim
 
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
+# Install system dependencies (git needed for repo clone in app)
+RUN apt-get update && apt-get install -y git \
     && rm -rf /var/lib/apt/lists/*
 
-# Create log directory early (owned by root initially)
+# Create log directory early
 RUN mkdir -p /var/log/app
 
 # Copy requirements and install Python dependencies
-COPY github-app/requirements.txt .
+COPY github-app/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the copyright validation script from scripts directory
-COPY scripts/copyrightcheck.py ./copyrightcheck.py
-RUN chmod +x ./copyrightcheck.py
-
-# Copy application code
+# Copy application code only (script fetched dynamically at runtime)
 COPY github-app/app.py .
 
 # Create non-root user and ensure ownership of app and log dirs
@@ -28,7 +25,7 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# (Optional) Define volume for persistent logs
+# Persistent logs volume
 VOLUME ["/var/log/app"]
 
 # Run the application

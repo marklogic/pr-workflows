@@ -100,31 +100,21 @@ class CopyrightValidator:
             relative_path: File path relative to repository root
         """
         relative_path = os.path.normpath(relative_path)
-        
-        # Always exclude dotfiles (files starting with .)
         filename = os.path.basename(relative_path)
-        if filename.startswith('.'):
+        if filename.startswith('.'):  # dotfile exclusion
             print(f"🚫 Excluding dotfile: {relative_path}")
             return True
-        
         for excluded_pattern in self.excluded_files:
             excluded_pattern = os.path.normpath(excluded_pattern)
-            
-            # Check for exact match
             if relative_path == excluded_pattern:
                 print(f"🚫 Excluding (exact match): {relative_path} matches {excluded_pattern}")
                 return True
-            
-            # Check for pattern match (simple glob-like matching)
             if '*' in excluded_pattern:
                 pattern = excluded_pattern.replace('*', '.*')
                 if re.match(pattern, relative_path):
                     print(f"🚫 Excluding (pattern match): {relative_path} matches {excluded_pattern}")
                     return True
-        
         print(f"✅ Including: {relative_path}")
-        return False
-                
         return False
     
     def _get_expected_copyright(self) -> str:
@@ -202,21 +192,13 @@ class CopyrightValidator:
         return result
     
     def validate_files(self, file_paths: List[str], relative_paths: List[str] = None) -> List[Dict[str, Any]]:
-        """Validate copyright in multiple files.
-        
-        Args:
-            file_paths: Absolute paths to files for file operations
-            relative_paths: Relative paths for exclusion checking (optional)
-        """
+        """Validate multiple files with single exclusion pass."""
         results = []
-        
-        # If no relative paths provided, use file_paths as-is
         if relative_paths is None:
             relative_paths = file_paths
-        
         for file_path, relative_path in zip(file_paths, relative_paths):
-            # Use relative path for exclusion checking
-            if self._is_excluded(relative_path):
+            excluded = self._is_excluded(relative_path)
+            if excluded:
                 results.append({
                     'file': file_path,
                     'relative_path': relative_path,
@@ -226,12 +208,9 @@ class CopyrightValidator:
                     'found_copyright': None
                 })
                 continue
-            
-            # Use absolute path for file operations
-            result = self.validate_file(file_path)
+            result = self.validate_file(file_path)  # validate_file will call _is_excluded again but we could refactor further if desired
             result['relative_path'] = relative_path
             results.append(result)
-        
         return results
     
     def print_results(self, results: List[Dict[str, Any]]):
