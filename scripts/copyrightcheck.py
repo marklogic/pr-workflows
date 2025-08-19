@@ -347,7 +347,13 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
     def fmt_file(entry, prefix_symbol):
         src = entry.get('source')
         if src:
-            return f"{prefix_symbol} {entry['file']} ({src})"
+            # Map simple source codes to descriptive phrases
+            src_map = {
+                'PR': 'origin: PR changes',
+                'Base': 'origin: base repository'
+            }
+            desc = src_map.get(src, f"origin: {src}")
+            return f"{prefix_symbol} {entry['file']} ({desc})"
         return f"{prefix_symbol} {entry['file']}"
     if struct['failed']:
         lines.append('### Failed Files')
