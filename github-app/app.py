@@ -194,6 +194,8 @@ def build_summary_comment(structured, commit_sha):
     footer = f"\n_Commit: {commit_sha}_"
     if not md.endswith('\n'):
         md += '\n'
+    # Hidden marker for reliable updates
+    md += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n'
     return md + footer
 
 def find_existing_comment(access_token, repo_full_name, pr_number):
@@ -208,6 +210,8 @@ def find_existing_comment(access_token, repo_full_name, pr_number):
             return None
         for c in resp.json():
             body = c.get('body', '')
+            if '<!-- COPYRIGHT-CHECK-COMMENT:' in body:  # use hidden marker
+                return c.get('id')
             if body.startswith('## ✅ Copyright Validation') or body.startswith('## ❌ Copyright Validation'):
                 return c.get('id')
     except Exception:
@@ -482,7 +486,7 @@ class CopyrightValidator:
             return None
 
     def validate(self):
-        """Run copyright validation"""
+        """Perform validation and include origin mapping for each file (PR vs Base)."""
         try:
             logger.info("Starting copyright validation...")
             
@@ -499,12 +503,12 @@ class CopyrightValidator:
             # Get configuration file from the cloned repo (after diff is applied)
             config_path, config_source = self.get_config_file()
             if not config_path:
-                return {'success': False, 'error': 'Copyright configuration file not found'}
+                return {'success': False, 'error': 'Config not found'}
             
             # Get copyright validation script
             script_path = self.get_copyright_script()
             if not script_path:
-                return {'success': False, 'error': 'Copyright validation script not found'}
+                return {'success': False, 'error': 'Script not found'}
             
             # Run copyright validation with new approach
             logger.info(f"Running copyright validation on {len(downloaded_files)} files...")
@@ -522,37 +526,28 @@ class CopyrightValidator:
                 relative_files.append(rel_path)
                 logger.info(f"🔄 Path conversion: {abs_file_path} -> {rel_path}")
                 
-            # Build command with working directory pointing to base repo clone
+            # Create origins mapping file for script consumption
+            origins_path = os.path.join(self.temp_dir, 'origins.txt')
+            try:
+                with open(origins_path, 'w') as of:
+                    for f in relative_files:
+                        if f in self.files_from_diff:
+                            of.write(f"{f} PR\n")
+                        else:
+                            of.write(f"{f} Base\n")
+                logger.info(f"Origins mapping written: {origins_path}")
+            except Exception as e:
+                logger.warning(f"Failed to write origins mapping: {e}")
+                origins_path = None
             command = [
                 'python3', script_path,
                 '--config', config_path,
                 '--working-dir', base_clone_dir
-            ] + relative_files
-            
-            logger.info("🔧 Copyright validation command:")
-            logger.info(f"   Script: {script_path}")
-            logger.info(f"   Config: {config_path}")
-            logger.info(f"   Working directory: {base_clone_dir}")
-            logger.info(f"   Files to validate: {len(relative_files)}")
-            for i, file in enumerate(relative_files, 1):
-                logger.info(f"     {i:2d}: {file}")
-            
-            # Show config content that the script will use
-            try:
-                with open(config_path, 'r') as f:
-                    config_content = f.read().strip()
-                logger.info("📄 Config file content passed to validation script:")
-                for line_num, line in enumerate(config_content.split('\n'), 1):
-                    logger.info(f"     {line_num:2d}: {line}")
-            except Exception as e:
-                logger.warning(f"Could not read config content before validation: {e}")
-            
-            result = subprocess.run(command,
-                cwd=base_clone_dir,  # Run from the base repository directory
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            ]
+            if origins_path:
+                command += ['--origins-file', origins_path]
+            command += relative_files
+            result = subprocess.run(command, cwd=base_clone_dir, capture_output=True, text=True, timeout=300)
             
             logger.info(f"Copyright validation completed with exit code: {result.returncode}")
             logger.info(f"Stdout: {result.stdout}")
@@ -563,7 +558,11 @@ class CopyrightValidator:
             try:
                 structured = parse_script_output_markdown(result.stdout)
             except Exception as e:
-                logger.error(f"Structured parsing failed; no PR comment will be posted: {e}")
+                logger.error(f"Parsing markdown failed: {e}")
+            
+            if structured and structured.get('markdown'):
+                # No post-processing needed; origins already injected by script if provided
+                pass
             
             if result.returncode == 0:
                 return {
@@ -584,10 +583,8 @@ class CopyrightValidator:
                 }
                 
         except subprocess.TimeoutExpired:
-            logger.error("Copyright validation timed out")
             return {'success': False, 'error': 'Validation timed out after 5 minutes'}
         except Exception as e:
-            logger.error(f"Copyright validation failed: {e}")
             return {'success': False, 'error': str(e)}
 
 def create_status_check(access_token, repo_full_name, commit_sha, state, description):
@@ -636,33 +633,20 @@ def create_or_update_pr_comment(access_token, repo_full_name, pr_number, body):
     """Create or update a comment on the PR with detailed validation results"""
     try:
         logger.info(f"Creating or updating PR comment on {repo_full_name}#{pr_number}")
-        
-        # Construct the API URL for PR comments
         api_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/{pr_number}/comments"
-        
-        headers = {
-            'Authorization': f'token {access_token}',
-            'Accept': 'application/vnd.github.v3+json'
-        }
-        
-        # List existing comments
+        headers = {'Authorization': f'token {access_token}', 'Accept': 'application/vnd.github.v3+json'}
         existing = requests.get(api_url, headers=headers, verify=VERIFY_SSL)
         target_id = None
         if existing.status_code == 200:
             for c in existing.json():
-                if c.get('body', '').startswith('## ✅ Copyright Validation') or \
-                   c.get('body', '').startswith('## ❌ Copyright Validation'):
-                    target_id = c['id']
-                    break
-        
+                b = c.get('body','')
+                if '<!-- COPYRIGHT-CHECK-COMMENT:' in b or b.startswith('## ✅ Copyright Validation') or b.startswith('## ❌ Copyright Validation'):
+                    target_id = c['id']; break
         if target_id:
-            # Update existing comment
             upd_url = f"{GHES_URL}/api/v3/repos/{repo_full_name}/issues/comments/{target_id}"
             resp = requests.patch(upd_url, json={'body': body}, headers=headers, verify=VERIFY_SSL)
         else:
-            # Create new comment
             resp = requests.post(api_url, json={'body': body}, headers=headers, verify=VERIFY_SSL)
-        
         if resp.status_code not in [200, 201]:
             logger.warning(f"Failed to create/update PR comment: {resp.status_code} {resp.text[:200]}")
     except Exception as e:

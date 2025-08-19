@@ -20,6 +20,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Set, Dict, Any
 
+# Truncation safeguards constants
+MAX_MARKDOWN_LENGTH = 60000  # ~60KB safeguard for GitHub comment/body limits
+PASS_LIST_TRUNCATE_THRESHOLD = 200  # show only first N passed files when truncating
+TRUNCATION_NOTE = "(Output truncated to keep comment size reasonable)"
+
 
 class CopyrightValidator:
     """Validates copyright headers in source files."""
@@ -266,7 +271,10 @@ class CopyrightValidator:
             print("✅ All files have valid copyright headers!")
 
 
-def build_summary_struct(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_summary_struct(results: List[Dict[str, Any]], origins: Dict[str, str] = None) -> Dict[str, Any]:
+    # UPDATED: optional origins mapping (relative_path -> source string like 'PR' or 'Base')
+    if origins is None:
+        origins = {}
     total_files = len(results)
     valid_files = [r for r in results if r['valid'] and not r['excluded']]
     invalid_files = [r for r in results if not r['valid'] and not r['excluded']]
@@ -280,19 +288,27 @@ def build_summary_struct(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         },
         'failed': [
             {
-                'file': r['relative_path'] if 'relative_path' in r else r['file'],
+                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
                 'found': r.get('found_copyright') or None,
                 'expected': r.get('expected_copyright') or None,
-                'error': r.get('error') or None
+                'error': r.get('error') or None,
+                'source': origins.get(r.get('relative_path') or r.get('file'))
             }
             for r in invalid_files
         ],
         'passed': [
-            {'file': r['relative_path'] if 'relative_path' in r else r['file']}
+            {
+                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
+                'source': origins.get(r.get('relative_path') or r.get('file'))
+            }
             for r in valid_files
         ],
         'skipped': [
-            {'file': r['relative_path'] if 'relative_path' in r else r['file'], 'reason': 'excluded'}
+            {
+                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
+                'reason': 'excluded',
+                'source': origins.get(r.get('relative_path') or r.get('file'))
+            }
             for r in excluded_files
         ],
         'generated_at': datetime.utcnow().isoformat() + 'Z'
@@ -301,6 +317,7 @@ def build_summary_struct(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def build_markdown_summary(struct: Dict[str, Any]) -> str:
+    # ...existing code before loops...
     counts = struct['counts']
     total = counts.get('total', 0)
     valid = counts.get('valid', 0)
@@ -313,10 +330,16 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
     if excluded:
         parts.append(f"Skipped: {excluded}")
     lines = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
+    # UPDATED: include source markers next to each file if present
+    def fmt_file(entry, prefix_symbol):
+        src = entry.get('source')
+        if src:
+            return f"{prefix_symbol} {entry['file']} ({src})"
+        return f"{prefix_symbol} {entry['file']}"
     if struct['failed']:
         lines.append('### Failed Files')
         for f in struct['failed']:
-            lines.append(f"❌ {f['file']}")
+            lines.append(fmt_file(f, '❌'))
             if f.get('found'): lines.append(f"   Found: {f['found']}")
             if f.get('expected'): lines.append(f"   Expected: {f['expected']}")
             if f.get('error'): lines.append(f"   Error: {f['error']}")
@@ -324,17 +347,57 @@ def build_markdown_summary(struct: Dict[str, Any]) -> str:
     if struct['skipped']:
         lines.append('### Skipped Files')
         for f in struct['skipped']:
-            lines.append(f"⏭️ {f['file']}")
+            lines.append(fmt_file(f, '⏭️'))
         lines.append('')
-    if struct['passed']:
+    # Passed files (may get truncated if overall markdown too large)
+    passed_entries = struct['passed']
+    if passed_entries:
         lines.append('### Passed Files')
-        for f in struct['passed']:
-            lines.append(f"✅ {f['file']}")
+        for f in passed_entries:
+            lines.append(fmt_file(f, '✅'))
         lines.append('')
     if not success:
         lines.append('### Fix Guidance')
         lines.append('Update headers to match Expected line above; then push changes.')
-    return '\n'.join(lines).rstrip() + '\n'
+    md = '\n'.join(lines).rstrip() + '\n'
+
+    # Truncation safeguard: if markdown exceeds limit, rebuild with truncated passed list
+    if len(md) > MAX_MARKDOWN_LENGTH and passed_entries:
+        # Rebuild passed section truncated
+        truncated_lines = []
+        # Keep everything up to '### Passed Files' header
+        # Easier: rebuild from scratch with truncated passed list only
+        lines_trunc = []
+        lines_trunc.append(f"## {header_emoji} {header_title}")
+        lines_trunc.append(' | '.join(parts))
+        lines_trunc.append('')
+        if struct['failed']:
+            lines_trunc.append('### Failed Files')
+            for f in struct['failed']:
+                lines_trunc.append(fmt_file(f, '❌'))
+                if f.get('found'): lines_trunc.append(f"   Found: {f['found']}")
+                if f.get('expected'): lines_trunc.append(f"   Expected: {f['expected']}")
+                if f.get('error'): lines_trunc.append(f"   Error: {f['error']}")
+                lines_trunc.append('')
+        if struct['skipped']:
+            lines_trunc.append('### Skipped Files')
+            for f in struct['skipped']:
+                lines_trunc.append(fmt_file(f, '⏭️'))
+            lines_trunc.append('')
+        lines_trunc.append('### Passed Files (truncated)')
+        display_subset = passed_entries[:PASS_LIST_TRUNCATE_THRESHOLD]
+        for f in display_subset:
+            lines_trunc.append(fmt_file(f, '✅'))
+        remaining = len(passed_entries) - len(display_subset)
+        if remaining > 0:
+            lines_trunc.append(f"… +{remaining} more passed files truncated")
+        lines_trunc.append('')
+        if not success:
+            lines_trunc.append('### Fix Guidance')
+            lines_trunc.append('Update headers to match Expected line above; then push changes.')
+        lines_trunc.append(f"_Note: {TRUNCATION_NOTE}_")
+        md = '\n'.join(lines_trunc).rstrip() + '\n'
+    return md
 
 
 def emit_summary_blocks(struct: Dict[str, Any]):
@@ -379,6 +442,11 @@ Examples:
         '--files-from-stdin',
         action='store_true',
         help='Read file paths from standard input (one per line)'
+    )
+    
+    parser.add_argument(
+        '--origins-file',
+        help='Optional mapping file: one line per file: <path><whitespace><origin>. When present, per-file origins appear in summary.'
     )
     
     args = parser.parse_args()
@@ -435,7 +503,21 @@ Examples:
     # Print results (always verbose)
     validator.print_results(results)
     
-    struct = build_summary_struct(results)
+    # Build origins map if provided
+    origins_map: Dict[str, str] = {}
+    if getattr(args, 'origins_file', None) and os.path.exists(args.origins_file):
+        try:
+            with open(args.origins_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    parts = re.split(r'[\s]+', line, maxsplit=1)
+                    if len(parts) == 2:
+                        path, source = parts
+                        origins_map[path] = source
+        except Exception as e:
+            print(f"Warning: could not read origins file {args.origins_file}: {e}")
+    struct = build_summary_struct(results, origins_map)
     emit_summary_blocks(struct)
     
     # Exit with error code if any files are invalid
