@@ -9,6 +9,7 @@ using direct API calls (no PyGithub dependency for GHES compatibility).
 import os
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import tempfile
 import requests
 from flask import Flask, request, jsonify
@@ -20,9 +21,32 @@ from pathlib import Path
 import base64
 import re
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Replace basicConfig with explicit dual handlers: stdout + rotating file
+LOG_DIR = '/var/log/app'
+LOG_FILE = os.path.join(LOG_DIR, 'app.log')
+logger = logging.getLogger()  # root logger so all modules inherit
+logger.setLevel(logging.INFO)
+# Clear default handlers if any (avoid duplicate logs on reload)
+if logger.handlers:
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+
+# Stream handler (stdout) for docker logs
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
+# Rotating file handler (daily, keep 7 backups)
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    file_handler = TimedRotatingFileHandler(LOG_FILE, when='D', interval=1, backupCount=7, utc=True)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.info(f"File logging enabled: {LOG_FILE} (daily rotation, 7 backups)")
+except Exception as e:
+    logger.warning(f"Failed to set up file logging ({LOG_FILE}): {e}. Continuing with stdout only.")
 
 app = Flask(__name__)
 
