@@ -89,9 +89,9 @@ jobs:
         script: |
           const fs = require('fs');
           try {
-            if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); return; }
+            if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); core.setOutput('comment_action','unavailable'); return; }
             let mdRaw='';
-            try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); return; }
+            try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); core.setOutput('comment_action','unavailable'); return; }
             const sha = context.payload.pull_request.head.sha;
             if (!mdRaw.endsWith('\n')) mdRaw += '\n';
             if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
@@ -101,18 +101,30 @@ jobs:
             const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
             if (existing) {
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: md });
+              core.setOutput('comment_action','updated');
             } else {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, body: md });
+              core.setOutput('comment_action','created');
             }
           } catch(e) {
             core.error(`Failed to create/update PR comment: ${e.status || ''} ${e.message}`);
             if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
+            core.setOutput('comment_action','unavailable');
           }
 
-    - name: Fail if needed
+    - name: Check for validation errors
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      env:
+        COMMENT_ACTION: ${{ steps.pr-comment.outputs.comment_action }}
       run: |
-        [ "${{ steps.validate.outputs.status }}" = "success" ] || exit 1
+        if [ "${{ steps.validate.outputs.status }}" != "success" ]; then
+          if [ "$COMMENT_ACTION" = "updated" ] || [ "$COMMENT_ACTION" = "created" ]; then
+            echo "::error title=Copyright Validation Failed::See the $COMMENT_ACTION PR comment for detailed results.";
+          else
+            echo "::error title=Copyright Validation Failed::See the PR comment (unavailable or failed to post).";
+          fi
+          exit 1
+        fi
 
     - name: No-op summary
       if: steps.changed-files.outputs.skip-validation == 'true'
