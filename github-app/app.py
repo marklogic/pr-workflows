@@ -517,7 +517,7 @@ class CopyrightValidator:
             for abs_file_path in downloaded_files:
                 # Extract relative path from the absolute path structure
                 # Example: /tmp/tmp123/README.MD -> README.MD
-                rel_path = os.path.relpath(abs_file_path, self.temp_dir)
+                rel_path = os.path.relpath(abs_file_path, self_temp_dir)
                 relative_files.append(rel_path)
                 logger.info(f"🔄 Path conversion: {abs_file_path} -> {rel_path}")
                 
@@ -695,7 +695,7 @@ def webhook():
                 repo_full_name,
                 commit_sha,
                 'pending',
-                'Copyright validation in progress...'
+                'Copyright check running...'
             )
         except Exception as e:
             logger.error(f"Failed to create pending status: {e}")
@@ -738,7 +738,7 @@ def webhook():
                 repo_full_name,
                 commit_sha,
                 'success',
-                description
+                'Copyright check passed. See PR comment.'
             )
         else:
             structured = result.get('structured')
@@ -754,7 +754,7 @@ def webhook():
                 repo_full_name,
                 commit_sha,
                 'failure',
-                f"Copyright validation failed ({display_count} file{'s' if display_count != 1 else ''} invalid)"
+                'Copyright check failed. See PR comment.'
             )
         
         # Create PR comment with detailed results
