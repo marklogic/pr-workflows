@@ -82,32 +82,63 @@ jobs:
         cat summary.md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Post / Update PR comment with summary
+      id: pr-comment
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       uses: actions/github-script@v7
       with:
         script: |
           const fs = require('fs');
-          if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); return; }
-          let mdRaw='';
-          try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.setFailed('summary.md not found'); return; }
-          const sha = context.payload.pull_request.head.sha;
-          if (!mdRaw.endsWith('\n')) mdRaw += '\n';
-          if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
-          const md = mdRaw + `_Commit: ${sha}_`;
-          const number = context.payload.pull_request.number;
           try {
+            if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); core.setOutput('comment_action','unavailable'); return; }
+            let mdRaw='';
+            try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); core.setOutput('comment_action','unavailable'); return; }
+            const sha = context.payload.pull_request.head.sha;
+            if (!mdRaw.endsWith('\n')) mdRaw += '\n';
+            if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
+            const md = mdRaw + `_Commit: ${sha}_`;
+            const number = context.payload.pull_request.number;
             const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, per_page: 100 });
             const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
             if (existing) {
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: md });
+              core.setOutput('comment_action','updated');
             } else {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, body: md });
+              core.setOutput('comment_action','created');
             }
           } catch(e) {
             core.error(`Failed to create/update PR comment: ${e.status || ''} ${e.message}`);
             if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
-            core.warning('Continuing without PR comment.');
+            core.setOutput('comment_action','unavailable');
           }
+
+    - name: Set commit status (short description)
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      uses: actions/github-script@v7
+      env:
+        COMMENT_ACTION: ${{ steps.pr-comment.outputs.comment_action }}
+      with:
+        script: |
+          const sha = context.payload.pull_request.head.sha;
+          const state = '${{ steps.validate.outputs.status }}' === 'success' ? 'success' : 'failure';
+          const action = (process.env.COMMENT_ACTION || '').toLowerCase();
+          let actionPhrase;
+          if (action === 'updated' || action === 'created') {
+            actionPhrase = `See the ${action} PR comment.`;
+          } else {
+            actionPhrase = 'PR comment unavailable.';
+          }
+          const description = state === 'success'
+            ? `Copyright check passed. ${actionPhrase}`
+            : `Copyright check failed. ${actionPhrase}`;
+          await github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha,
+            state,
+            context: 'copyright-validation',
+            description
+          });
 
     - name: Fail if needed
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
