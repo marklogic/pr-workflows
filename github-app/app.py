@@ -517,7 +517,7 @@ class CopyrightValidator:
             for abs_file_path in downloaded_files:
                 # Extract relative path from the absolute path structure
                 # Example: /tmp/tmp123/README.MD -> README.MD
-                rel_path = os.path.relpath(abs_file_path, self_temp_dir)
+                rel_path = os.path.relpath(abs_file_path, base_clone_dir)
                 relative_files.append(rel_path)
                 logger.info(f"🔄 Path conversion: {abs_file_path} -> {rel_path}")
                 
@@ -733,13 +733,7 @@ def webhook():
                 description += ")"
             else:
                 description = f"Copyright validation passed ({result.get('files_checked', 0)} files)"
-            create_status_check(
-                access_token,
-                repo_full_name,
-                commit_sha,
-                'success',
-                'Copyright check passed. See PR comment.'
-            )
+            # (Old per-file count description retained above but not used in final status message)
         else:
             structured = result.get('structured')
             if structured and structured.get('counts'):
@@ -749,15 +743,9 @@ def webhook():
             else:
                 display_count = 1
             logger.info(f"Debug - Status check invalid file count: {display_count}")
-            create_status_check(
-                access_token,
-                repo_full_name,
-                commit_sha,
-                'failure',
-                'Copyright check failed. See PR comment.'
-            )
         
-        # Create PR comment with detailed results
+        # Create / update PR comment and capture action
+        comment_action = 'unavailable'
         try:
             structured = result.get('structured')
             if structured:
@@ -765,14 +753,34 @@ def webhook():
                 existing_comment_id = find_existing_comment(access_token, repo_full_name, pr_number)
                 if existing_comment_id:
                     update_pr_comment(access_token, repo_full_name, existing_comment_id, comment_body)
+                    comment_action = 'updated'
                 else:
                     create_pr_comment(access_token, repo_full_name, pr_number, comment_body)
+                    comment_action = 'created'
             else:
                 logger.warning("No structured data available; skipping PR comment.")
         except Exception as e:
             logger.error(f"Failed to create PR comment: {e}")
+            comment_action = 'unavailable'
         
-        logger.info(f"Copyright validation completed for PR #{pr_number}: {'PASSED' if result['success'] else 'FAILED'}")
+        # Unified final status description per template
+        try:
+            base_desc = f"Copyright check {'passed' if result['success'] else 'failed'}."
+            if comment_action in ('updated','created'):
+                final_desc = f"{base_desc} See the {comment_action} PR comment."
+            else:
+                final_desc = f"{base_desc} PR comment unavailable."
+            create_status_check(
+                access_token,
+                repo_full_name,
+                commit_sha,
+                'success' if result['success'] else 'failure',
+                final_desc
+            )
+        except Exception as e:
+            logger.error(f"Failed to create final status: {e}")
+        
+        logger.info(f"Copyright validation completed for PR #{pr_number}: {'PASSED' if result['success'] else 'FAILED'} (comment_action={comment_action})")
         
         return jsonify({'message': 'Webhook processed successfully'}), 200
         
