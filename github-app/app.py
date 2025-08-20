@@ -415,28 +415,19 @@ class CopyrightValidator:
             
             for file_path in file_paths:
                 source_path = os.path.join(base_clone_dir, file_path)
-                dest_path = os.path.join(self.temp_dir, file_path)
-                
-                # Create directory if needed
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                
                 if os.path.exists(source_path):
-                    shutil.copy2(source_path, dest_path)
-                    downloaded_files.append(dest_path)
-                    
-                    # Determine if this file was in the diff and successfully applied
+                    # Use the path inside base_repo directly (no copy) so relpaths resolve correctly
+                    downloaded_files.append(source_path)
                     file_in_diff = f"--- a/{file_path}" in diff_content or f"+++ b/{file_path}" in diff_content
                     successfully_applied = f"Applied patch {file_path} cleanly" in apply_result.stderr
-                    
                     if file_in_diff and (apply_result.returncode == 0 or successfully_applied):
                         self.files_from_diff.append(file_path)
-                        logger.info(f"Copied file from diff: {file_path}")
+                        logger.info(f"File from diff: {file_path}")
                     else:
                         self.files_from_base.append(file_path)
-                        logger.info(f"Copied file from base: {file_path}")
+                        logger.info(f"File from base: {file_path}")
                 else:
                     logger.warning(f"File not found: {file_path}")
-            
             status = f"with PR changes ({len(self.files_from_diff)} files)" if self.diff_applied else "base files only"
             if self.files_from_diff and self.files_from_base:
                 status = f"mixed: {len(self.files_from_diff)} from diff, {len(self.files_from_base)} from base"
