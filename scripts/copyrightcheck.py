@@ -243,24 +243,30 @@ class CopyrightValidator:
         excluded_files = sum(1 for r in results if r['excluded'])
         invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
 
-        # Configurable limit so comment doesn't explode
-        LIST_LIMIT = 200  # hard cap; adjust if needed
+        LIST_LIMIT = 200  # safety cap
 
+        # Start marker
         print(MARKER_START)
 
-        print(f"\nCopyright Validation Results:")
-        print(f"{'=' * 50}")
-        print(f"Total files checked: {total_files}")
-        print(f"Valid files: {valid_files}")
-        print(f"Invalid files: {invalid_files}")
-        print(f"Excluded files: {excluded_files}")
+        # Title + counts summary (counts line format consumed by GitHub App parser)
+        print("Copyright Validation Results:")
+        print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
         print()
-        
-        has_invalid = False
-        for result in results:
-            if not result['valid'] and not result['excluded']:
-                has_invalid = True
-                print(f"❌ {result['file']}")
+        print(f"Details:")
+        print(f"  Total files checked: {total_files}")
+        print(f"  Valid files: {valid_files}")
+        print(f"  Invalid files: {invalid_files}")
+        print(f"  Excluded (skipped) files: {excluded_files}")
+        print()
+
+        # Invalid files section
+        has_invalid = invalid_files > 0
+        if has_invalid:
+            print("### ❌ Failed Files")
+            for result in results:
+                if result['valid'] or result['excluded']:
+                    continue
+                print(f"\n{result['file']}")
                 print("```diff")
                 if result['error']:
                     print(f"- Error: {result['error']}")
@@ -271,33 +277,32 @@ class CopyrightValidator:
                     print("- Found: <none>")
                 print(f"+ Expected: {result['expected_copyright']}")
                 print("```")
-                print()
-        
-        # Always show excluded (skipped) files list
+            print()
+
+        # Skipped / excluded files
         excluded_list = [r for r in results if r['excluded']]
         if excluded_list:
-            print("Skipped (excluded) files:")
+            print("### ⏭️ Skipped (Excluded) Files")
             for r in excluded_list[:LIST_LIMIT]:
-                print(f"⏭️  {r['file']}")
+                print(f"- {r['file']}")
             if len(excluded_list) > LIST_LIMIT:
-                print(f"… ({len(excluded_list) - LIST_LIMIT} more omitted)\n")
-            else:
-                print()
-        
-        # Always show valid files list
+                print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
+            print()
+
+        # Valid files
         valid_list = [r for r in results if r['valid'] and not r['excluded']]
         if valid_list:
-            print("Valid files:")
+            print("### ✅ Valid Files")
             for r in valid_list[:LIST_LIMIT]:
-                print(f"✅ {r['file']}")
+                print(f"- {r['file']}")
             if len(valid_list) > LIST_LIMIT:
-                print(f"… ({len(valid_list) - LIST_LIMIT} more omitted)\n")
-            else:
-                print()
-        
-        if not has_invalid:
-            print("✅ All files have valid copyright headers!")
+                print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
+            print()
 
+        if not has_invalid:
+            print("✅ All files have valid copyright headers!\n")
+
+        # End marker
         print(MARKER_END)
 
 
