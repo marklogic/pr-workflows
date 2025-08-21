@@ -239,6 +239,7 @@ class CopyrightValidator:
         MARKER_START = "<<<COPYRIGHT-CHECK:MARKDOWN>>>"
         MARKER_END = "<<<END COPYRIGHT-CHECK:MARKDOWN>>>"
         total_files = len(results)
+        # Fixed logical operator '&&' to 'and'
         valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
         invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
@@ -257,11 +258,13 @@ class CopyrightValidator:
                 if result['valid'] or result['excluded']:
                     continue
                 # Bullet list item for each failed file with indented details
-                print(f"- {result['file']}")
+                print(f"- `{result['file']}`")
+                print()  # blank line for visual spacing before error details
                 err_msg = result.get('error') or 'Invalid header'
-                print(f"  Error: {err_msg}")
+                # Add red color via HTML (GitHub may sanitize style; graceful fallback)
+                print(f"  <strong><span style='color:#d73a49'>Error:</span></strong> {err_msg}")
                 expected_line = result['expected_copyright']
-                print("  <small>Expected header:</small>")
+                print("  <strong><small>Expected header:</small></strong>")
                 print("  ```")
                 print(f"  {expected_line}")
                 print("  ```")
@@ -271,7 +274,7 @@ class CopyrightValidator:
         if excluded_list:
             print("### ⏭️ Skipped (Excluded) Files")
             for r in excluded_list[:LIST_LIMIT]:
-                print(f"- {r['file']}")
+                print(f"- `{r['file']}`")
             if len(excluded_list) > LIST_LIMIT:
                 print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
             print()
@@ -280,7 +283,7 @@ class CopyrightValidator:
         if valid_list:
             print("### ✅ Valid Files")
             for r in valid_list[:LIST_LIMIT]:
-                print(f"- {r['file']}")
+                print(f"- `{r['file']}`")
             if len(valid_list) > LIST_LIMIT:
                 print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
             print()
