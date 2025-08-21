@@ -306,6 +306,9 @@ class CopyrightValidator:
         if not has_invalid:
             print("✅ All files have valid copyright headers!\n")
 
+        # Generation timestamp (script-originated)
+        print(f"<small>Generated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}</small>")
+
         print(MARKER_END)
 
 
