@@ -136,8 +136,7 @@ if jwt_token:
 else:
     logger.error("Failed to create GitHub App JWT token")
 
-# --- New helpers for structured block extraction (Markdown only) ---
-# Removed JSON block support; validation script now emits only markdown summary block.
+# --- New helpers for structured block extraction (Markdown only) for summary ---
 MD_START = '<<<COPYRIGHT-CHECK:MARKDOWN>>>'
 MD_END = '<<<END COPYRIGHT-CHECK:MARKDOWN>>>'
 
@@ -779,111 +778,11 @@ def webhook():
         logger.error(f"Webhook processing failed: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint"""
-    return jsonify({'status': 'healthy'}), 200
-
-@app.route('/debug/integration', methods=['GET'])
-def debug_integration():
-    """Debug endpoint to test GitHub integration using direct API calls"""
-    try:
-        logger.info("Debug: Testing GitHub integration with direct API calls...")
-        
-        # Check environment variables
-        debug_info = {
-            'app_id': APP_ID,
-            'has_private_key': PRIVATE_KEY is not None,
-            'private_key_length': len(PRIVATE_KEY) if PRIVATE_KEY else 0,
-            'private_key_starts_with': PRIVATE_KEY[:50] if PRIVATE_KEY else None,
-            'ghes_url': GHES_URL,
-            'using_direct_api': True,
-        }
-        
-        # Test JWT token creation
-        try:
-            jwt_token = create_jwt_token()
-            if jwt_token:
-                debug_info['jwt_test'] = 'success'
-                debug_info['jwt_length'] = len(jwt_token)
-            else:
-                debug_info['jwt_test'] = 'failed'
-        except Exception as e:
-            debug_info['jwt_error'] = str(e)
-            return jsonify(debug_info), 500
-        
-        # Test app info endpoint
-        try:
-            headers = {
-                'Authorization': f'Bearer {jwt_token}',
-                'Accept': 'application/vnd.github.v3+json'
-            }
-            
-            app_url = f"{GHES_URL}/api/v3/app"
-            response = requests.get(app_url, headers=headers, verify=VERIFY_SSL)
-            
-            if response.status_code == 200:
-                app_data = response.json()
-                debug_info['app_test'] = 'success'
-                debug_info['app_name'] = app_data.get('name')
-                debug_info['app_installations_count'] = app_data.get('installations_count', 0)
-            else:
-                debug_info['app_error'] = f"HTTP {response.status_code}: {response.text[:200]}"
-                
-        except Exception as e:
-            debug_info['app_error'] = str(e)
-        
-        # Test installations endpoint
-        try:
-            install_url = f"{GHES_URL}/api/v3/app/installations"
-            response = requests.get(install_url, headers=headers, verify=VERIFY_SSL)
-            
-            if response.status_code == 200:
-                installations = response.json()
-                debug_info['installations_test'] = 'success'
-                debug_info['installation_count'] = len(installations)
-                
-                install_list = []
-                for install in installations:
-                    install_id = install.get('id')
-                    account_login = install.get('account', {}).get('login') if install.get('account') else None
-                    install_list.append((install_id, account_login))
-                
-                debug_info['installations'] = install_list
-            else:
-                debug_info['installations_error'] = f"HTTP {response.status_code}: {response.text[:200]}"
-                
-        except Exception as e:
-            debug_info['installations_error'] = str(e)
-        
-        # Test installation access token (if installation ID provided)
-        installation_id = request.args.get('installation_id')
-        if installation_id:
-            try:
-                installation_id = int(installation_id)
-                debug_info['testing_installation'] = installation_id
-                
-                access_token = get_installation_access_token(installation_id)
-                debug_info['token_test'] = 'success'
-                debug_info['token_length'] = len(access_token)
-                
-            except Exception as e:
-                debug_info['token_error'] = str(e)
-        
-        return jsonify(debug_info), 200
-        
-    except Exception as e:
-        logger.error(f"Debug integration failed: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
 if __name__ == '__main__':
-    # Validate required environment variables
     required_vars = ['GITHUB_APP_ID', 'GITHUB_PRIVATE_KEY']
     missing_vars = [var for var in required_vars if not os.environ.get(var)]
-    
     if missing_vars:
         logger.error(f"Missing required environment variables: {missing_vars}")
         exit(1)
-    
     port = int(os.environ.get('PORT', 8000))
     app.run(host='0.0.0.0', port=port, debug=False)
