@@ -245,15 +245,11 @@ class CopyrightValidator:
 
         LIST_LIMIT = 200  # safety cap
 
-        # Start marker
         print(MARKER_START)
-
-        # Title + counts summary
         print("Copyright Validation Results:")
         print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
         print()
 
-        # Invalid files section
         has_invalid = invalid_files > 0
         if has_invalid:
             print("### ❌ Failed Files")
@@ -261,28 +257,20 @@ class CopyrightValidator:
                 if result['valid'] or result['excluded']:
                     continue
                 print(f"\n{result['file']}")
-                print("```diff")
-                # Error line (red)
                 if result['error']:
-                    print(f"- Error: {result['error']}")
-                # Found line as neutral context
+                    print(f"❗ **Error:** {result['error']}")
                 found_line = result.get('found_copyright')
                 if found_line:
-                    print(f"  Found: {found_line}")
+                    print(f"**Found:** {found_line}")
                 else:
-                    print("  Found: <none>")
-                # Expected line (green)
+                    print("**Found:** <none>")
                 expected_line = result['expected_copyright']
-                print(f"+ Expected: {expected_line}")
-                print("```")
-                # Copy-ready expected header only
-                print("Expected header (copy):")
+                print("**Expected (copy below):**")
                 print("```")
                 print(expected_line)
                 print("```")
             print()
 
-        # Skipped / excluded files
         excluded_list = [r for r in results if r['excluded']]
         if excluded_list:
             print("### ⏭️ Skipped (Excluded) Files")
@@ -292,7 +280,6 @@ class CopyrightValidator:
                 print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
             print()
 
-        # Valid files
         valid_list = [r for r in results if r['valid'] and not r['excluded']]
         if valid_list:
             print("### ✅ Valid Files")
@@ -305,7 +292,6 @@ class CopyrightValidator:
         if not has_invalid:
             print("✅ All files have valid copyright headers!\n")
 
-        # End marker
         print(MARKER_END)
 
 
