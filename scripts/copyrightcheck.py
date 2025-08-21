@@ -258,11 +258,11 @@ class CopyrightValidator:
                 if result['valid'] or result['excluded']:
                     continue
                 # Bullet list item for each failed file with indented details
-                print(f"- `{result['file']}`")
+                print(f"- {result['file']}")
                 print()  # blank line for visual spacing before error details
                 err_msg = result.get('error') or 'Invalid header'
-                # Add red color via HTML (GitHub may sanitize style; graceful fallback)
-                print(f"  <strong><span style='color:#d73a49'>Error:</span></strong> {err_msg}")
+                # Error now fully red (label + message)
+                print(f"  <small><strong><span style='color:#d73a49'>Error: {err_msg}</span></strong></small>")
                 expected_line = result['expected_copyright']
                 print("  <strong><small>Expected header:</small></strong>")
                 print("  ```")
@@ -274,7 +274,7 @@ class CopyrightValidator:
         if excluded_list:
             print("### ⏭️ Skipped (Excluded) Files")
             for r in excluded_list[:LIST_LIMIT]:
-                print(f"- `{r['file']}`")
+                print(f"- {r['file']}")
             if len(excluded_list) > LIST_LIMIT:
                 print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
             print()
@@ -283,7 +283,7 @@ class CopyrightValidator:
         if valid_list:
             print("### ✅ Valid Files")
             for r in valid_list[:LIST_LIMIT]:
-                print(f"- `{r['file']}`")
+                print(f"- {r['file']}")
             if len(valid_list) > LIST_LIMIT:
                 print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
             print()
