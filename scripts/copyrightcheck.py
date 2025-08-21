@@ -247,7 +247,7 @@ class CopyrightValidator:
         LIST_LIMIT = 200  # safety cap
 
         print(MARKER_START)
-        print("Copyright Validation Results:")
+        print("**Copyright Validation Results**")
         print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
         print()
 
