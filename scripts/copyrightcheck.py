@@ -262,14 +262,23 @@ class CopyrightValidator:
                     continue
                 print(f"\n{result['file']}")
                 print("```diff")
+                # Error line (red)
                 if result['error']:
                     print(f"- Error: {result['error']}")
+                # Found line as neutral context
                 found_line = result.get('found_copyright')
                 if found_line:
-                    print(f"- Found: {found_line}")
+                    print(f"  Found: {found_line}")
                 else:
-                    print("- Found: <none>")
-                print(f"+ Expected: {result['expected_copyright']}")
+                    print("  Found: <none>")
+                # Expected line (green)
+                expected_line = result['expected_copyright']
+                print(f"+ Expected: {expected_line}")
+                print("```")
+                # Copy-ready expected header only
+                print("Expected header (copy):")
+                print("```")
+                print(expected_line)
                 print("```")
             print()
 
