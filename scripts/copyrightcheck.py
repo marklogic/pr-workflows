@@ -248,15 +248,9 @@ class CopyrightValidator:
         # Start marker
         print(MARKER_START)
 
-        # Title + counts summary (counts line format consumed by GitHub App parser)
+        # Title + counts summary
         print("Copyright Validation Results:")
         print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
-        print()
-        print(f"Details:")
-        print(f"  Total files checked: {total_files}")
-        print(f"  Valid files: {valid_files}")
-        print(f"  Invalid files: {invalid_files}")
-        print(f"  Excluded (skipped) files: {excluded_files}")
         print()
 
         # Invalid files section
