@@ -274,14 +274,6 @@ class CopyrightValidator:
                 print(f"  {expected_line}")
                 print("  ```")
             print()
-            # Guidance section (single, concise, no duplicate header block spam)
-            print("### 🛠️ Guidance")
-            print("Follow these steps to fix the failed files:")
-            print("1. Insert the expected header at the very top (within first 20 lines) of each failed file.")
-            print("2. Ensure the year range matches the configuration (start year through current year).")
-            print("3. Do not alter spacing or punctuation in the header line.")
-            print("4. Commit and push the changes to update this check.")
-            print()
 
         excluded_list = [r for r in results if r['excluded']]
         if excluded_list:
@@ -301,6 +293,16 @@ class CopyrightValidator:
                 print(f"- {display_path}")
             if len(valid_list) > LIST_LIMIT:
                 print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
+            print()
+
+        # Moved Guidance section here (after all file lists, before success/timestamp)
+        if has_invalid:
+            print("### 🛠️ Guidance")
+            print("Follow these steps to fix the failed files:")
+            print("1. Insert the expected header at the very top (within first 20 lines) of each failed file.")
+            print("2. Ensure the year range matches the configuration (start year through current year).")
+            print("3. Do not alter spacing or punctuation in the header line.")
+            print("4. Commit and push the changes to update this check.")
             print()
 
         if not has_invalid:
