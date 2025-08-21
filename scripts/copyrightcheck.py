@@ -4,12 +4,6 @@ Copyright validation script for checking copyright headers in source files.
 
 This script validates that files contain the correct copyright header format
 based on configuration settings.
-
-Always emits at end of stdout one delimited Markdown summary block:
-  <<<COPYRIGHT-CHECK:MARKDOWN>>>
-  ... markdown summary ...
-  <<<END COPYRIGHT-CHECK:MARKDOWN>>>
-No flags required.
 """
 
 import argparse
@@ -17,12 +11,8 @@ import os
 import re
 import sys
 from datetime import datetime
-from typing import List, Dict, Any
-
-# Truncation safeguards constants
-MAX_MARKDOWN_LENGTH = 60000  # ~60KB safeguard for GitHub comment/body limits
-PASS_LIST_TRUNCATE_THRESHOLD = 200  # show only first N passed files when truncating
-TRUNCATION_NOTE = "(Output truncated to keep comment size reasonable)"
+from pathlib import Path
+from typing import List, Set, Dict, Any
 
 
 class CopyrightValidator:
@@ -43,7 +33,7 @@ class CopyrightValidator:
             self.excluded_files = set()
         else:
             self.excluded_files = set(excluded_files_list)
-    
+        
     def _load_config(self, config_file: str) -> Dict[str, Any]:
         """Load configuration from plain text file."""
         config = {}
@@ -110,21 +100,31 @@ class CopyrightValidator:
             relative_path: File path relative to repository root
         """
         relative_path = os.path.normpath(relative_path)
+        
+        # Always exclude dotfiles (files starting with .)
         filename = os.path.basename(relative_path)
-        if filename.startswith('.'):  # dotfile exclusion
+        if filename.startswith('.'):
             print(f"🚫 Excluding dotfile: {relative_path}")
             return True
+        
         for excluded_pattern in self.excluded_files:
             excluded_pattern = os.path.normpath(excluded_pattern)
+            
+            # Check for exact match
             if relative_path == excluded_pattern:
                 print(f"🚫 Excluding (exact match): {relative_path} matches {excluded_pattern}")
                 return True
+            
+            # Check for pattern match (simple glob-like matching)
             if '*' in excluded_pattern:
                 pattern = excluded_pattern.replace('*', '.*')
                 if re.match(pattern, relative_path):
                     print(f"🚫 Excluding (pattern match): {relative_path} matches {excluded_pattern}")
                     return True
+        
         print(f"✅ Including: {relative_path}")
+        return False
+                
         return False
     
     def _get_expected_copyright(self) -> str:
@@ -155,10 +155,8 @@ class CopyrightValidator:
         
         return normalized_actual == normalized_expected
     
-    def validate_file(self, file_path: str, skip_exclusion: bool = False) -> Dict[str, Any]:
-        """Validate copyright in a single file.
-        skip_exclusion: when True, caller already performed exclusion logic.
-        """
+    def validate_file(self, file_path: str) -> Dict[str, Any]:
+        """Validate copyright in a single file."""
         result = {
             'file': file_path,
             'valid': False,
@@ -167,14 +165,20 @@ class CopyrightValidator:
             'found_copyright': '',
             'expected_copyright': self._get_expected_copyright()
         }
-        if not skip_exclusion and self._is_excluded(file_path):
+        
+        # Check if file is excluded
+        if self._is_excluded(file_path):
             result['excluded'] = True
-            result['valid'] = True
+            result['valid'] = True  # Excluded files are considered valid
             return result
+        
         try:
+            # Check if file exists
             if not os.path.exists(file_path):
                 result['error'] = f"File not found: {file_path}"
                 return result
+            
+            # Read file content
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
@@ -198,11 +202,20 @@ class CopyrightValidator:
         return result
     
     def validate_files(self, file_paths: List[str], relative_paths: List[str] = None) -> List[Dict[str, Any]]:
-        """Validate multiple files with single exclusion pass (no duplicate exclusion checks)."""
+        """Validate copyright in multiple files.
+        
+        Args:
+            file_paths: Absolute paths to files for file operations
+            relative_paths: Relative paths for exclusion checking (optional)
+        """
         results = []
+        
+        # If no relative paths provided, use file_paths as-is
         if relative_paths is None:
             relative_paths = file_paths
+        
         for file_path, relative_path in zip(file_paths, relative_paths):
+            # Use relative path for exclusion checking
             if self._is_excluded(relative_path):
                 results.append({
                     'file': file_path,
@@ -213,13 +226,16 @@ class CopyrightValidator:
                     'found_copyright': None
                 })
                 continue
-            r = self.validate_file(file_path, skip_exclusion=True)
-            r['relative_path'] = relative_path
-            results.append(r)
+            
+            # Use absolute path for file operations
+            result = self.validate_file(file_path)
+            result['relative_path'] = relative_path
+            results.append(result)
+        
         return results
     
-    def print_results(self, results: List[Dict[str, Any]]):
-        """Print validation results (always verbose)."""
+    def print_results(self, results: List[Dict[str, Any]], verbose: bool = False):
+        """Print validation results."""
         total_files = len(results)
         valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
@@ -239,182 +255,37 @@ class CopyrightValidator:
             if not result['valid'] and not result['excluded']:
                 has_invalid = True
                 print(f"❌ {result['file']}")
+                # Use a diff fenced block for colored distinction in markdown
+                print("```diff")
                 if result['error']:
-                    print(f"   Error: {result['error']}")
-                if result['found_copyright']:
-                    print(f"   Found: {result['found_copyright']}")
-                print(f"   Expected: {result['expected_copyright']}")
+                    print(f"- Error: {result['error']}")
+                found_line = result.get('found_copyright')
+                if found_line:
+                    print(f"- Found: {found_line}")
+                else:
+                    print("- Found: <none>")
+                print(f"+ Expected: {result['expected_copyright']}")
+                print("```")
                 print()
         
-        # Always print excluded files (verbose mode always on)
-        if excluded_files > 0:
+        # Print excluded files if verbose
+        if verbose and excluded_files > 0:
             print("Excluded files:")
             for result in results:
                 if result['excluded']:
                     print(f"⏭️  {result['file']}")
             print()
         
-        # Always print valid files (verbose mode always on)
-        print("Valid files:")
-        for result in results:
-            if result['valid'] and not result['excluded']:
-                print(f"✅ {result['file']}")
-        print()
+        # Print valid files if verbose
+        if verbose:
+            print("Valid files:")
+            for result in results:
+                if result['valid'] and not result['excluded']:
+                    print(f"✅ {result['file']}")
+            print()
         
         if not has_invalid:
             print("✅ All files have valid copyright headers!")
-
-
-def build_summary_struct(results: List[Dict[str, Any]], origins: Dict[str, str] = None) -> Dict[str, Any]:
-    # UPDATED: optional origins mapping (relative_path -> source string like 'PR' or 'Base')
-    if origins is None:
-        origins = {}
-    total_files = len(results)
-    valid_files = [r for r in results if r['valid'] and not r['excluded']]
-    invalid_files = [r for r in results if not r['valid'] and not r['excluded']]
-    excluded_files = [r for r in results if r['excluded']]
-    struct = {
-        'counts': {
-            'total': total_files,
-            'valid': len(valid_files),
-            'invalid': len(invalid_files),
-            'excluded': len(excluded_files)
-        },
-        'failed': [
-            {
-                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
-                'found': r.get('found_copyright') or None,
-                'expected': r.get('expected_copyright') or None,
-                'error': r.get('error') or None,
-                'source': origins.get(r.get('relative_path') or r.get('file'))
-            }
-            for r in invalid_files
-        ],
-        'passed': [
-            {
-                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
-                'source': origins.get(r.get('relative_path') or r.get('file'))
-            }
-            for r in valid_files
-        ],
-        'skipped': [
-            {
-                'file': (r['relative_path'] if 'relative_path' in r else r['file']),
-                'reason': 'excluded',
-                'source': origins.get(r.get('relative_path') or r.get('file'))
-            }
-            for r in excluded_files
-        ],
-        'generated_at': datetime.utcnow().isoformat() + 'Z'
-    }
-    return struct
-
-
-def parse_markdown_counts(md_block):
-    """Strict parse counts line from markdown summary; raise on failure."""
-    if not md_block:
-        raise ValueError("No markdown block provided")
-    lines = [l.strip() for l in md_block.splitlines() if l.strip()]
-    if len(lines) < 2:
-        raise ValueError("Markdown summary missing counts line")
-    counts_line = lines[1]
-    pattern = r"Total:\s*(\d+).*?Passed:\s*(\d+).*?Failed:\s*(\d+)(?:.*?Skipped:\s*(\d+))?"
-    m = re.search(pattern, counts_line)
-    if not m:
-        raise ValueError(f"Counts line not parseable: {counts_line}")
-    total, passed, failed, skipped = m.groups()
-    return {
-        'total': int(total),
-        'valid': int(passed),
-        'invalid': int(failed),
-        'excluded': int(skipped) if skipped is not None else 0
-    }
-
-
-def build_markdown_summary(struct: Dict[str, Any]) -> str:
-    counts = struct['counts']
-    total = counts.get('total', 0)
-    valid = counts.get('valid', 0)
-    invalid = counts.get('invalid', 0)
-    excluded = counts.get('excluded', 0)
-    success = invalid == 0
-    header_emoji = '✅' if success else '❌'
-    header_title = 'Copyright Validation Passed' if success else 'Copyright Validation Failed'
-    parts = [f"Total: {total}", f"Passed: {valid}", f"Failed: {invalid}"]
-    if excluded:
-        parts.append(f"Skipped: {excluded}")
-    lines = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
-    def fmt_file(entry, prefix_symbol):
-        src = entry.get('source')
-        if src:
-            # Map simple source codes to descriptive phrases
-            src_map = {
-                'PR': 'origin: PR changes',
-                'Base': 'origin: base repository'
-            }
-            desc = src_map.get(src, f"origin: {src}")
-            return f"{prefix_symbol} {entry['file']} ({desc})"
-        return f"{prefix_symbol} {entry['file']}"
-    if struct['failed']:
-        lines.append('### Failed Files')
-        for f in struct['failed']:
-            lines.append(fmt_file(f, '❌'))
-            if f.get('found'): lines.append(f"   Found: {f['found']}")
-            if f.get('expected'): lines.append(f"   Expected: {f['expected']}")
-            if f.get('error'): lines.append(f"   Error: {f['error']}")
-            lines.append('')
-    if struct['skipped']:
-        lines.append('### Skipped Files')
-        for f in struct['skipped']:
-            lines.append(fmt_file(f, '⏭️'))
-        lines.append('')
-    passed_entries = struct['passed']
-    if passed_entries:
-        lines.append('### Passed Files')
-        for f in passed_entries:
-            lines.append(fmt_file(f, '✅'))
-        lines.append('')
-    if not success:
-        lines.append('### Fix Guidance')
-        lines.append('Update headers to match Expected line above; then push changes.')
-    md = '\n'.join(lines).rstrip() + '\n'
-    if len(md) > MAX_MARKDOWN_LENGTH and passed_entries:
-        lines_trunc = [f"## {header_emoji} {header_title}", ' | '.join(parts), '']
-        if struct['failed']:
-            lines_trunc.append('### Failed Files')
-            for f in struct['failed']:
-                lines_trunc.append(fmt_file(f, '❌'))
-                if f.get('found'): lines_trunc.append(f"   Found: {f['found']}")
-                if f.get('expected'): lines_trunc.append(f"   Expected: {f['expected']}")
-                if f.get('error'): lines_trunc.append(f"   Error: {f['error']}")
-                lines_trunc.append('')
-        if struct['skipped']:
-            lines_trunc.append('### Skipped Files')
-            for f in struct['skipped']:
-                lines_trunc.append(fmt_file(f, '⏭️'))
-            lines_trunc.append('')
-        lines_trunc.append('### Passed Files (truncated)')
-        subset = passed_entries[:PASS_LIST_TRUNCATE_THRESHOLD]
-        for f in subset:
-            lines_trunc.append(fmt_file(f, '✅'))
-        remaining = len(passed_entries) - len(subset)
-        if remaining > 0:
-            lines_trunc.append(f"… +{remaining} more passed files truncated")
-        lines_trunc.append('')
-        if not success:
-            lines_trunc.append('### Fix Guidance')
-            lines_trunc.append('Update headers to match Expected line above; then push changes.')
-        lines_trunc.append(f"_Note: {TRUNCATION_NOTE}_")
-        md = '\n'.join(lines_trunc).rstrip() + '\n'
-    return md
-
-
-def emit_summary_blocks(struct: Dict[str, Any]):
-    # Renamed semantic: now only emits the markdown block
-    md_block = build_markdown_summary(struct)
-    print('<<<COPYRIGHT-CHECK:MARKDOWN>>>')
-    print(md_block, end='')
-    print('<<<END COPYRIGHT-CHECK:MARKDOWN>>>')
 
 
 def main():
@@ -454,8 +325,9 @@ Examples:
     )
     
     parser.add_argument(
-        '--origins-file',
-        help='Optional mapping file: one line per file: <path><whitespace><origin>. When present, per-file origins appear in summary.'
+        '-v', '--verbose',
+        action='store_true',
+        help='Show detailed output including valid and excluded files'
     )
     
     args = parser.parse_args()
@@ -509,28 +381,11 @@ Examples:
     # Validate files using absolute paths for file ops, relative for exclusion
     results = validator.validate_files(absolute_file_paths, relative_file_paths)
     
-    # Print results (always verbose)
-    validator.print_results(results)
-    
-    # Build origins map if provided
-    origins_map: Dict[str, str] = {}
-    if getattr(args, 'origins_file', None) and os.path.exists(args.origins_file):
-        try:
-            with open(args.origins_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'): continue
-                    parts = re.split(r'[\s]+', line, maxsplit=1)
-                    if len(parts) == 2:
-                        path, source = parts
-                        origins_map[path] = source
-        except Exception as e:
-            print(f"Warning: could not read origins file {args.origins_file}: {e}")
-    struct = build_summary_struct(results, origins_map)
-    emit_summary_blocks(struct)
+    # Print results
+    validator.print_results(results, verbose=args.verbose)
     
     # Exit with error code if any files are invalid
-    invalid_count = struct['counts'].get('invalid', 0)
+    invalid_count = sum(1 for r in results if not r['valid'] and not r['excluded'])
     if invalid_count > 0:
         sys.exit(1)
 
