@@ -261,10 +261,9 @@ class CopyrightValidator:
                 print(f"- {result['file']}")
                 print()  # blank line for visual spacing before error details
                 err_msg = result.get('error') or 'Invalid header'
-                # Diff fenced block for red coloring (will show copy button)
-                print("  ```diff")
-                print(f"  - Error: {err_msg}")
-                print("  ```")
+                # Error label similar to expected header (no diff fence)
+                print("  <small><strong>Error:</strong></small>")
+                print(f"  {err_msg}")
                 expected_line = result['expected_copyright']
                 print("  <small><strong>Expected header:</strong></small>")
                 print("  ```")
