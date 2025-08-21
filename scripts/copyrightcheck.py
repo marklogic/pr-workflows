@@ -257,8 +257,9 @@ class CopyrightValidator:
             for result in results:
                 if result['valid'] or result['excluded']:
                     continue
-                # Bullet list item for each failed file with indented details
-                print(f"- {result['file']}")
+                # Prefer relative path for display
+                display_path = result.get('relative_path') or result['file']
+                print(f"- {display_path}")
                 print()  # blank line for visual spacing before error details
                 err_msg = result.get('error') or 'Invalid header'
                 # Error label small + bold
@@ -278,7 +279,8 @@ class CopyrightValidator:
         if excluded_list:
             print("### ⏭️ Skipped (Excluded) Files")
             for r in excluded_list[:LIST_LIMIT]:
-                print(f"- {r['file']}")
+                display_path = r.get('relative_path') or r['file']
+                print(f"- {display_path}")
             if len(excluded_list) > LIST_LIMIT:
                 print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
             print()
@@ -287,7 +289,8 @@ class CopyrightValidator:
         if valid_list:
             print("### ✅ Valid Files")
             for r in valid_list[:LIST_LIMIT]:
-                print(f"- {r['file']}")
+                display_path = r.get('relative_path') or r['file']
+                print(f"- {display_path}")
             if len(valid_list) > LIST_LIMIT:
                 print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
             print()
