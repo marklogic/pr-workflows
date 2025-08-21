@@ -340,6 +340,12 @@ Examples:
         help='Show detailed output including valid and excluded files'
     )
     
+    parser.add_argument(
+        '--origins-file',
+        help='Optional file containing origin metadata for each file (ignored by validator)',
+        required=False
+    )
+    
     args = parser.parse_args()
     
     # Get file paths
