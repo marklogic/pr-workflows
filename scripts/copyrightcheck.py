@@ -236,11 +236,16 @@ class CopyrightValidator:
     
     def print_results(self, results: List[Dict[str, Any]], verbose: bool = False):
         """Print validation results."""
+        MARKER_START = "<<<COPYRIGHT-CHECK:MARKDOWN>>>"
+        MARKER_END = "<<<END COPYRIGHT-CHECK:MARKDOWN>>>"
         total_files = len(results)
         valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
         invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
-        
+
+        # Begin marker so workflow AWK captures content
+        print(MARKER_START)
+
         print(f"\nCopyright Validation Results:")
         print(f"{'=' * 50}")
         print(f"Total files checked: {total_files}")
@@ -286,6 +291,9 @@ class CopyrightValidator:
         
         if not has_invalid:
             print("✅ All files have valid copyright headers!")
+
+        # End marker
+        print(MARKER_END)
 
 
 def main():
