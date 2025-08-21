@@ -261,10 +261,8 @@ class CopyrightValidator:
                 print(f"- {result['file']}")
                 print()  # blank line for visual spacing before error details
                 err_msg = result.get('error') or 'Invalid header'
-                # Use diff code block to achieve red coloring for the error line in GitHub markdown
-                print("  ```diff")
-                print(f"  - Error: {err_msg}")
-                print("  ```")
+                # Plain text error (no code fence so no copy button)
+                print(f"  ❌ Error: {err_msg}")
                 expected_line = result['expected_copyright']
                 print("  <small><strong>Expected header:</strong></small>")
                 print("  ```")
