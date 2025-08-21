@@ -256,17 +256,15 @@ class CopyrightValidator:
             for result in results:
                 if result['valid'] or result['excluded']:
                     continue
-                print(f"\n{result['file']}")
-                # Red error line using diff fence; subtle italic message inside
-                print("```diff")
+                # Bullet list item for each failed file with indented details
+                print(f"- {result['file']}")
                 err_msg = result.get('error') or 'Invalid header'
-                print(f"- Error: {err_msg}")
-                print("```")
+                print(f"  Error: {err_msg}")
                 expected_line = result['expected_copyright']
-                print("**Expected header (copy):**")
-                print("```")
-                print(expected_line)
-                print("```")
+                print("  <small>Expected header:</small>")
+                print("  ```")
+                print(f"  {expected_line}")
+                print("  ```")
             print()
 
         excluded_list = [r for r in results if r['excluded']]
