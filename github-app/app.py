@@ -18,6 +18,7 @@ import subprocess
 import shutil
 import base64
 import re
+from datetime import datetime
 
 LOG_DIR = '/var/log/app'
 LOG_FILE = os.path.join(LOG_DIR, 'app.log')
@@ -173,15 +174,17 @@ def parse_script_output_markdown(raw_stdout):
     return None
 
 def build_summary_comment(structured, commit_sha):
-    """Return markdown for PR comment from structured data (markdown already present)."""
+    """Return markdown for PR comment from structured data (no header augmentation).
+    The script now emits timestamp + commit when COMMIT_SHA/GITHUB_SHA is set.
+    We only append the hidden marker for update detection.
+    """
     if not structured:
         return "No summary available."
-    md = structured.get('markdown', '')
+    md = structured.get('markdown', '').rstrip('\n')
     if not md.endswith('\n'):
         md += '\n'
-    # Hidden marker for reliable updates
     md += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n'
-    return md + f"\n_Commit: {commit_sha}_"
+    return md
 
 def find_existing_comment(access_token, repo_full_name, pr_number):
     try:
@@ -334,7 +337,13 @@ class CopyrightValidator:
             if origins_path:
                 cmd += ['--origins-file', origins_path]
             cmd += rel_files
-            proc = subprocess.run(cmd, cwd=base_clone_dir, capture_output=True, text=True, timeout=300)
+            # Inject COMMIT_SHA for uniform script header output
+            run_env = os.environ.copy()
+            try:
+                run_env['COMMIT_SHA'] = self.pr_data['head']['sha']
+            except Exception:
+                pass
+            proc = subprocess.run(cmd, cwd=base_clone_dir, capture_output=True, text=True, timeout=300, env=run_env)
             structured = None
             try:
                 structured = parse_script_output_markdown(proc.stdout)
