@@ -243,7 +243,9 @@ class CopyrightValidator:
         excluded_files = sum(1 for r in results if r['excluded'])
         invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
 
-        # Begin marker so workflow AWK captures content
+        # Configurable limit so comment doesn't explode
+        LIST_LIMIT = 200  # hard cap; adjust if needed
+
         print(MARKER_START)
 
         print(f"\nCopyright Validation Results:")
@@ -254,13 +256,11 @@ class CopyrightValidator:
         print(f"Excluded files: {excluded_files}")
         print()
         
-        # Print details for invalid files
         has_invalid = False
         for result in results:
             if not result['valid'] and not result['excluded']:
                 has_invalid = True
                 print(f"❌ {result['file']}")
-                # Use a diff fenced block for colored distinction in markdown
                 print("```diff")
                 if result['error']:
                     print(f"- Error: {result['error']}")
@@ -273,26 +273,31 @@ class CopyrightValidator:
                 print("```")
                 print()
         
-        # Print excluded files if verbose
-        if verbose and excluded_files > 0:
-            print("Excluded files:")
-            for result in results:
-                if result['excluded']:
-                    print(f"⏭️  {result['file']}")
-            print()
+        # Always show excluded (skipped) files list
+        excluded_list = [r for r in results if r['excluded']]
+        if excluded_list:
+            print("Skipped (excluded) files:")
+            for r in excluded_list[:LIST_LIMIT]:
+                print(f"⏭️  {r['file']}")
+            if len(excluded_list) > LIST_LIMIT:
+                print(f"… ({len(excluded_list) - LIST_LIMIT} more omitted)\n")
+            else:
+                print()
         
-        # Print valid files if verbose
-        if verbose:
+        # Always show valid files list
+        valid_list = [r for r in results if r['valid'] and not r['excluded']]
+        if valid_list:
             print("Valid files:")
-            for result in results:
-                if result['valid'] and not result['excluded']:
-                    print(f"✅ {result['file']}")
-            print()
+            for r in valid_list[:LIST_LIMIT]:
+                print(f"✅ {r['file']}")
+            if len(valid_list) > LIST_LIMIT:
+                print(f"… ({len(valid_list) - LIST_LIMIT} more omitted)\n")
+            else:
+                print()
         
         if not has_invalid:
             print("✅ All files have valid copyright headers!")
 
-        # End marker
         print(MARKER_END)
 
 
