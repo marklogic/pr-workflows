@@ -61,6 +61,8 @@ jobs:
       id: validate
       if: steps.changed-files.outputs.skip-validation != 'true'
       continue-on-error: true
+      env:
+          COPYRIGHT_CHECK_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         script="pr-workflows/scripts/copyrightcheck.py"
         cfg="${{ steps.setup-config.outputs.config-file }}"

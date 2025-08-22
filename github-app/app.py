@@ -337,10 +337,10 @@ class CopyrightValidator:
             if origins_path:
                 cmd += ['--origins-file', origins_path]
             cmd += rel_files
-            # Inject COMMIT_SHA for uniform script header output
+            # Inject COPYRIGHT_CHECK_COMMIT_SHA for uniform script header output
             run_env = os.environ.copy()
             try:
-                run_env['COMMIT_SHA'] = self.pr_data['head']['sha']
+                run_env['COPYRIGHT_CHECK_COMMIT_SHA'] = self.pr_data['head']['sha']
             except Exception:
                 pass
             proc = subprocess.run(cmd, cwd=base_clone_dir, capture_output=True, text=True, timeout=300, env=run_env)

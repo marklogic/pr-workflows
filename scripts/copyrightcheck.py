@@ -247,14 +247,13 @@ class CopyrightValidator:
         LIST_LIMIT = 200  # safety cap
 
         print(MARKER_START)
-        # Inline timestamp + optional commit near header
-        commit_sha = os.environ.get('GITHUB_SHA') or os.environ.get('COMMIT_SHA')
-        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+        ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+        commit_sha = os.environ.get('COPYRIGHT_CHECK_COMMIT_SHA')
         if commit_sha:
             short_sha = commit_sha[:12]
-            print(f"**Copyright Validation Results**  <small>{timestamp} | Commit: {short_sha}</small>")
+            print(f"**Copyright Validation Results**  <small>{ts} | Commit: {short_sha}</small>")
         else:
-            print(f"**Copyright Validation Results**  <small>{timestamp}</small>")
+            print(f"**Copyright Validation Results**  <small>{ts}</small>")
         print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
         print()
 
@@ -302,7 +301,7 @@ class CopyrightValidator:
                 print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
             print()
 
-        # Guidance after lists
+        # Moved Guidance section here (after all file lists, before success/timestamp)
         if has_invalid:
             print("### 🛠️ Guidance")
             print("Follow these steps to fix the failed files:")
@@ -315,7 +314,6 @@ class CopyrightValidator:
         if not has_invalid:
             print("✅ All files have valid copyright headers!\n")
 
-        # No footer timestamp (already shown in header)
         print(MARKER_END)
 
 
