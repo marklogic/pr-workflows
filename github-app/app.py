@@ -57,7 +57,7 @@ GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com').rstrip(
 SCRIPT_REPO_URL = os.environ.get('SCRIPT_REPO_URL', 'https://api.github.com')
 SCRIPT_REPO_OWNER = os.environ.get('SCRIPT_REPO_OWNER', 'marklogic')
 SCRIPT_REPO_NAME = os.environ.get('SCRIPT_REPO_NAME', 'pr-workflows')
-SCRIPT_BRANCH = os.environ.get('SCRIPT_BRANCH', 'copyright')
+SCRIPT_BRANCH = os.environ.get('SCRIPT_BRANCH', 'main')
 
 # GHES-specific options
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'true').lower() == 'true'
