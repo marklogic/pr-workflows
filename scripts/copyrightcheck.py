@@ -125,7 +125,6 @@ class CopyrightValidator:
         print(f"✅ Including: {relative_path}")
         return False
                 
-        return False
     
     def _get_expected_copyright(self) -> str:
         """Generate expected copyright header."""
