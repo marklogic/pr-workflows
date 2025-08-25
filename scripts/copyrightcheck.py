@@ -252,9 +252,9 @@ class CopyrightValidator:
         print("**Copyright Validation Results**")
         counts_line = f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}"
         if commit_sha:
-            counts_line += f"  <small>{ts} | Commit: {commit_sha[:12]}</small>"
+            counts_line += f"  <small>| at: {ts} | commit: {commit_sha[:12]}</small>"
         else:
-            counts_line += f"  <small>{ts}</small>"
+            counts_line += f"  <small>| at: {ts}</small>"
         print(counts_line)
         print()
 
