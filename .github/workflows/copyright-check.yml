@@ -94,10 +94,8 @@ jobs:
             if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); core.setOutput('comment_action','unavailable'); return; }
             let mdRaw='';
             try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); core.setOutput('comment_action','unavailable'); return; }
-            const sha = context.payload.pull_request.head.sha;
             if (!mdRaw.endsWith('\n')) mdRaw += '\n';
             if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
-            const md = mdRaw + `_Commit: ${sha}_`;
             const number = context.payload.pull_request.number;
             const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, per_page: 100 });
             const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
