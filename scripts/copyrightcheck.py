@@ -249,11 +249,11 @@ class CopyrightValidator:
         print(MARKER_START)
         ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         commit_sha = os.environ.get('COPYRIGHT_CHECK_COMMIT_SHA')
+        print("**Copyright Validation Results**")
         if commit_sha:
-            short_sha = commit_sha[:12]
-            print(f"**Copyright Validation Results**  <small>{ts} | Commit: {short_sha}</small>")
+            print(f"<small>{ts} | Commit: {commit_sha[:12]}</small>")
         else:
-            print(f"**Copyright Validation Results**  <small>{ts}</small>")
+            print(f"<small>{ts}</small>")
         print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
         print()
 
