@@ -250,11 +250,12 @@ class CopyrightValidator:
         ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
         commit_sha = os.environ.get('COPYRIGHT_CHECK_COMMIT_SHA')
         print("**Copyright Validation Results**")
+        counts_line = f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}"
         if commit_sha:
-            print(f"<small>{ts} | Commit: {commit_sha[:12]}</small>")
+            counts_line += f"  <small>{ts} | Commit: {commit_sha[:12]}</small>"
         else:
-            print(f"<small>{ts}</small>")
-        print(f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}")
+            counts_line += f"  <small>{ts}</small>"
+        print(counts_line)
         print()
 
         has_invalid = invalid_files > 0
