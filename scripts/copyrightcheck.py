@@ -239,7 +239,6 @@ class CopyrightValidator:
         MARKER_START = "<<<COPYRIGHT-CHECK:MARKDOWN>>>"
         MARKER_END = "<<<END COPYRIGHT-CHECK:MARKDOWN>>>"
         total_files = len(results)
-        # Fixed logical operator '&&' to 'and'
         valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
         excluded_files = sum(1 for r in results if r['excluded'])
         invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
