@@ -1,0 +1,131 @@
+name: Copyright Validation
+
+on:
+  workflow_call:
+
+jobs:
+  copyright-check:
+    name: Validate Copyright Headers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+    - name: Checkout PR head
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: target-repo
+
+    - name: Checkout pr-workflows repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/pr-workflows
+        ref: main
+        path: pr-workflows
+
+    - name: Setup config
+      id: setup-config
+      run: |
+        cfg="target-repo/.copyrightconfig"
+        if [ ! -f "$cfg" ]; then
+          git clone --depth 1 --branch ${{ github.event.pull_request.base.ref }} \
+            https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git base-repo
+          [ -f base-repo/.copyrightconfig ] && cfg="base-repo/.copyrightconfig"
+        fi
+        [ -f "$cfg" ] || { echo "missing config"; exit 1; }
+        [ -s "$cfg" ] || { echo "empty config"; exit 1; }
+        grep -q '^startyear:' "$cfg" || { echo "startyear missing"; exit 1; }
+        echo "config-file=$cfg" >> $GITHUB_OUTPUT
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Get changed files
+      id: changed-files
+      run: |
+        cd target-repo
+        base_sha="${{ github.event.pull_request.base.sha }}"
+        head_sha="${{ github.event.pull_request.head.sha }}"
+        git fetch origin ${{ github.event.pull_request.base.ref }}
+        git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
+        count=$(wc -l < ../files_to_check.txt | tr -d ' ')
+        if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
+        echo "files-count=$count" >> $GITHUB_OUTPUT
+
+    - name: Validate
+      id: validate
+      if: steps.changed-files.outputs.skip-validation != 'true'
+      continue-on-error: true
+      env:
+          COPYRIGHT_CHECK_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        script="pr-workflows/scripts/copyrightcheck.py"
+        cfg="${{ steps.setup-config.outputs.config-file }}"
+        [ -f "$script" ] || { echo "script missing"; exit 1; }
+        chmod +x "$script"
+        files=$(tr '\n' ' ' < files_to_check.txt)
+        python3 "$script" --config "$cfg" --working-dir target-repo $files > validation_output.txt 2>&1
+        ec=$?
+        if [ $ec -eq 0 ]; then echo "status=success" >> $GITHUB_OUTPUT; else echo "status=failed" >> $GITHUB_OUTPUT; fi
+        exit $ec
+
+    - name: Extract Markdown summary
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      run: |
+        awk '/^<<<COPYRIGHT-CHECK:MARKDOWN>>>/{f=1;next}/^<<<END COPYRIGHT-CHECK:MARKDOWN>>>/{f=0}f' validation_output.txt > summary.md
+        echo '----- BEGIN COPYRIGHT SUMMARY (also in Job Summary) -----'
+        cat summary.md
+        echo '----- END COPYRIGHT SUMMARY -----'
+        cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Post / Update PR comment with summary
+      id: pr-comment
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          try {
+            if (!context.payload.pull_request) { core.warning('No pull_request context; skipping comment.'); core.setOutput('comment_action','unavailable'); return; }
+            let mdRaw='';
+            try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); core.setOutput('comment_action','unavailable'); return; }
+            if (!mdRaw.endsWith('\n')) mdRaw += '\n';
+            if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
+            const number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, per_page: 100 });
+            const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: mdRaw });
+              core.setOutput('comment_action','updated');
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, body: mdRaw });
+              core.setOutput('comment_action','created');
+            }
+          } catch(e) {
+            core.error(`Failed to create/update PR comment: ${e.status || ''} ${e.message}`);
+            if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
+            core.setOutput('comment_action','unavailable');
+          }
+
+    - name: Check for validation errors
+      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      env:
+        COMMENT_ACTION: ${{ steps.pr-comment.outputs.comment_action }}
+      run: |
+        if [ "${{ steps.validate.outputs.status }}" != "success" ]; then
+          if [ "$COMMENT_ACTION" = "updated" ] || [ "$COMMENT_ACTION" = "created" ]; then
+            echo "::error title=Copyright Validation Failed::See the $COMMENT_ACTION PR comment for detailed results.";
+          else
+            echo "::error title=Copyright Validation Failed::See the PR comment (unavailable or failed to post).";
+          fi
+          exit 1
+        fi
+
+    - name: No-op summary
+      if: steps.changed-files.outputs.skip-validation == 'true'
+      run: echo "::notice title=Copyright Check::No files to validate"
