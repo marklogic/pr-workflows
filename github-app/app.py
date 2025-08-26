@@ -286,7 +286,9 @@ class CopyrightValidator:
             if diff_resp.status_code != 200:
                 raise Exception(f"Cannot get PR diff: {diff_resp.status_code}")
             diff_path = os.path.join(self.temp_dir, 'pr.diff')
-            open(diff_path,'w').write(diff_resp.text)
+            # Use context manager for writing diff file
+            with open(diff_path, 'w') as f:
+                f.write(diff_resp.text)
             base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
             token = self.headers['Authorization'].replace('token ','')
             auth_clone_url = f"https://x-access-token:{token}@{GHES_URL.replace('https://','')}/{self.repo_full_name}.git"
@@ -374,7 +376,9 @@ class CopyrightValidator:
             if resp.status_code == 200:
                 data = resp.json(); content = base64.b64decode(data['content']).decode('utf-8')
                 path = os.path.join(self.temp_dir, 'copyrightcheck.py')
-                open(path,'w').write(content)
+                # Use context manager for writing fetched script
+                with open(path, 'w') as f:
+                    f.write(content)
                 return path
             logger.error(f"Failed to fetch script: {resp.status_code}")
             return None
