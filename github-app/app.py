@@ -237,7 +237,12 @@ class CopyrightValidator:
             logger.error(f"Validator init failed: {e}")
             raise
     def __enter__(self):
-        self.temp_dir = tempfile.mkdtemp(); return self
+        try:
+            self.temp_dir = tempfile.mkdtemp()
+            return self
+        except Exception as e:
+            logger.error(f"Failed to create temporary directory for validation: {e}")
+            raise RuntimeError("Temporary workspace allocation failed") from e
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.temp_dir and os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
