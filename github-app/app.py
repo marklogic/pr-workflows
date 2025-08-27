@@ -364,8 +364,6 @@ class CopyrightValidator:
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
-    # Reattached methods below after validate for clarity
-    def copyright_script_error(self):
     def get_copyright_script(self):  # moved unchanged logic earlier, keep definition here for ordering clarity
         try:
             script_url = f"{SCRIPT_REPO_URL}/repos/{SCRIPT_REPO_OWNER}/{SCRIPT_REPO_NAME}/contents/scripts/copyrightcheck.py?ref={SCRIPT_BRANCH}"
