@@ -50,7 +50,20 @@ app = Flask(__name__)
 
 # GitHub App configuration
 APP_ID = os.environ.get('GITHUB_APP_ID')
-PRIVATE_KEY = os.environ.get('GITHUB_PRIVATE_KEY')
+PRIVATE_KEY_FILE = os.environ.get('GITHUB_PRIVATE_KEY_FILE')  # required: path to mounted PEM file
+
+# Load private key strictly from mounted file
+PRIVATE_KEY = None
+if PRIVATE_KEY_FILE:
+    try:
+        with open(PRIVATE_KEY_FILE, 'r') as pkf:
+            PRIVATE_KEY = pkf.read()
+        logger.info("Loaded private key from mounted file (GITHUB_PRIVATE_KEY_FILE)")
+    except Exception as e:
+        logger.error(f"Failed to read private key file '{PRIVATE_KEY_FILE}': {e}")
+else:
+    logger.error("GITHUB_PRIVATE_KEY_FILE environment variable is required (path to PEM key file)")
+
 GHES_URL = os.environ.get('GITHUB_ENTERPRISE_URL', 'https://github.com').rstrip('/')  # Remove trailing slash
 
 # Script repository configuration (defaults to GitHub.com)
@@ -68,8 +81,8 @@ if not APP_ID:
     raise ValueError("GITHUB_APP_ID not set")
 
 if not PRIVATE_KEY:
-    logger.error("GITHUB_PRIVATE_KEY environment variable is required")
-    raise ValueError("GITHUB_PRIVATE_KEY not set")
+    logger.error("Private key could not be loaded from file")
+    raise ValueError("GITHUB_PRIVATE_KEY_FILE invalid or unreadable")
 
 if not GHES_URL:
     logger.error("GITHUB_ENTERPRISE_URL environment variable is required")
