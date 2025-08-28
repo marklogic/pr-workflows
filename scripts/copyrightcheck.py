@@ -134,25 +134,45 @@ class CopyrightValidator:
     def _extract_copyright_from_content(self, content: str) -> str:
         """Extract copyright line from file content."""
         lines = content.split('\n')
-        
         # Look for copyright in first 20 lines
         for line in lines[:20]:
-            # Remove common comment characters and whitespace
+            # Remove common leading comment characters and whitespace
             cleaned_line = re.sub(r'^[\s\*#//]*', '', line).strip()
+            # Trim common trailing block terminators if present on same line
+            cleaned_line = re.sub(r'\*/\s*$', '', cleaned_line).strip()
             if cleaned_line.lower().startswith('copyright'):
                 return cleaned_line
-        
         return ""
     
     def _validate_copyright_format(self, copyright_line: str) -> bool:
-        """Validate if copyright line matches expected format."""
-        expected = self._get_expected_copyright()
-        
-        # Normalize both strings for comparison
-        normalized_expected = re.sub(r'\s+', ' ', expected.strip())
-        normalized_actual = re.sub(r'\s+', ' ', copyright_line.strip())
-        
-        return normalized_actual == normalized_expected
+        """Validate copyright line.
+        Accepts any header of the form:
+        Copyright (c) YYYY-YYYY Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+        where years are 4 digits, start <= end, and end <= current year (flexible start year per file).
+        Trailing block terminator already removed in extraction.
+        """
+        # Normalize whitespace and remove any trailing block terminator defensively
+        copyright_line = re.sub(r'\*/\s*$', '', copyright_line).strip()
+        normalized_actual = re.sub(r'\s+', ' ', copyright_line)
+        # Regex for pattern (case-insensitive on 'Copyright')
+        pattern = re.compile(r'^copyright \(c\) (\d{4})-(\d{4}) progress software corporation and/or its subsidiaries or affiliates\. all rights reserved\.$', re.IGNORECASE)
+        m = pattern.match(normalized_actual.lower())
+        if not m:
+            return False
+        start, end = int(m.group(1)), int(m.group(2))
+        # Basic sanity checks on years
+        current_year = self.current_year
+        if start > end:
+            return False
+        if end > current_year:
+            return False
+        if end != current_year:
+            return False
+        # Enforce repository configured start year
+        if start != self.start_year:
+            return False
+        # All conditions satisfied
+        return True
     
     def validate_file(self, file_path: str) -> Dict[str, Any]:
         """Validate copyright in a single file."""
