@@ -139,7 +139,7 @@ class CopyrightValidator:
             # Remove common leading comment characters and whitespace
             cleaned_line = re.sub(r'^[\s\*#//]*', '', line).strip()
             # Trim common trailing block terminators if present on same line
-            cleaned_line = re.sub(r'\*/\s*$', '', cleaned_line).strip()
+            cleaned_line = re.sub(r'(\*/|-->)\s*$', '', cleaned_line).strip()
             if cleaned_line.lower().startswith('copyright'):
                 return cleaned_line
         return ""
@@ -151,7 +151,8 @@ class CopyrightValidator:
         where years are 4 digits, start <= end, and end <= current year (flexible start year per file).
         Trailing block terminator already removed in extraction.
         """
-        # Normalize whitespace
+        # Normalize whitespace and remove any trailing block terminator defensively
+        copyright_line = re.sub(r'(\*/|-->)\s*$', '', copyright_line).strip()
         normalized_actual = re.sub(r'\s+', ' ', copyright_line)
         # Regex for pattern (case-insensitive on 'Copyright')
         pattern = re.compile(r'^copyright \(c\) (\d{4})-(\d{4}) progress software corporation and/or its subsidiaries or affiliates\. all rights reserved\.$', re.IGNORECASE)
