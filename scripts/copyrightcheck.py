@@ -140,7 +140,7 @@ class CopyrightValidator:
         # Look for copyright in first 20 lines
         for line in lines[:20]:
             # Remove common leading comment characters and whitespace (including HTML <!-- starts)
-            cleaned_line = re.sub(r'^[\s\*#//<!-]*', '', line).strip()
+            cleaned_line = re.sub(r'^[\s\*#\/]*(?:<!--)?', '', line).strip()
             # Trim common trailing block terminators if present on same line
             cleaned_line = re.sub(self.TRAILING_COMMENT_TERMINATORS, '', cleaned_line).strip()
             if cleaned_line.lower().startswith('copyright'):
