@@ -18,6 +18,9 @@ from typing import List, Set, Dict, Any
 class CopyrightValidator:
     """Validates copyright headers in source files."""
     
+    # Common patterns for comment block terminators
+    TRAILING_COMMENT_TERMINATORS = r'(\*/|-->)\s*$'
+    
     def __init__(self, config_file: str):
         """Initialize validator with configuration file."""
         self.config = self._load_config(config_file)
@@ -136,10 +139,10 @@ class CopyrightValidator:
         lines = content.split('\n')
         # Look for copyright in first 20 lines
         for line in lines[:20]:
-            # Remove common leading comment characters and whitespace
-            cleaned_line = re.sub(r'^[\s\*#//]*', '', line).strip()
+            # Remove common leading comment characters and whitespace (including HTML <!-- starts)
+            cleaned_line = re.sub(r'^[\s\*#//<!-]*', '', line).strip()
             # Trim common trailing block terminators if present on same line
-            cleaned_line = re.sub(r'(\*/|-->)\s*$', '', cleaned_line).strip()
+            cleaned_line = re.sub(self.TRAILING_COMMENT_TERMINATORS, '', cleaned_line).strip()
             if cleaned_line.lower().startswith('copyright'):
                 return cleaned_line
         return ""
@@ -152,7 +155,7 @@ class CopyrightValidator:
         Trailing block terminator already removed in extraction.
         """
         # Normalize whitespace and remove any trailing block terminator defensively
-        copyright_line = re.sub(r'(\*/|-->)\s*$', '', copyright_line).strip()
+        copyright_line = re.sub(self.TRAILING_COMMENT_TERMINATORS, '', copyright_line).strip()
         normalized_actual = re.sub(r'\s+', ' ', copyright_line)
         # Regex for pattern (case-insensitive on 'Copyright')
         pattern = re.compile(r'^copyright \(c\) (\d{4})-(\d{4}) progress software corporation and/or its subsidiaries or affiliates\. all rights reserved\.$', re.IGNORECASE)
