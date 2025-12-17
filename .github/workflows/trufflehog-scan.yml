@@ -1,0 +1,21 @@
+# Copyright (c) 2003-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved.
+name: Trufflehogscan
+on:
+  pull_request:  # Changed from pull_request_target to read workflow from PR branch
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  trufflehog-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Secret Scanning
+        uses: trufflesecurity/trufflehog@main
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --results=verified,unknown --exclude-paths=.trufflehog-exclude
