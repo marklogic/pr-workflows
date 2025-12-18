@@ -1,0 +1,33 @@
+name: TruffleHog Scan
+on:
+  workflow_call:
+
+jobs:
+  trufflehog-scan:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      
+      - name: Prepare scan arguments
+        id: prep
+        shell: bash
+        run: |
+          ARGS="--json --fail"
+          # Only add exclude-paths if file exists
+          if [ -f ".trufflehog-exclude" ]; then
+            ARGS="$ARGS --exclude-paths=.trufflehog-exclude"
+          fi
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+      
+      - name: Secret Scanning
+        uses: trufflesecurity/trufflehog@main
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: ${{ steps.prep.outputs.args }}
