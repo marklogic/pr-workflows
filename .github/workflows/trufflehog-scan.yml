@@ -1,4 +1,9 @@
+# Copyright (c) 2003-2025 Progress Software Corporation and/or its subsidiaries or affiliates. All Rights Reserved
+# TruffleHog Secret Scanning - Reusable Workflow
+# This workflow scans for secrets in pull request changes
+# Note: This workflow expects to be called from a pull_request event context
 name: TruffleHog Scan
+
 on:
   workflow_call:
 
@@ -22,6 +27,9 @@ jobs:
           # Only add exclude-paths if file exists
           if [ -f ".trufflehog-exclude" ]; then
             ARGS="$ARGS --exclude-paths=.trufflehog-exclude"
+            echo "Using exclusion file: .trufflehog-exclude"
+          else
+            echo "No exclusion file found, scanning all files"
           fi
           echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
       
@@ -31,3 +39,31 @@ jobs:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
           extra_args: ${{ steps.prep.outputs.args }}
+
+# ------------------------------------------------------------------------------
+# HOW TO EXCLUDE FILES/FOLDERS
+# ------------------------------------------------------------------------------
+# Create a .trufflehog-exclude file in your repository root with patterns:
+#
+# Example .trufflehog-exclude content:
+#   # Exclude specific files
+#   path/to/file.txt
+#   config/secrets.example.env
+#
+#   # Exclude entire folders
+#   tests/fixtures/**
+#   **/test_data/**
+#
+#   # Exclude by pattern
+#   *.test.env
+#   **/*.example
+#
+#   # Exclude documentation
+#   docs/**
+#
+# Patterns follow .gitignore syntax:
+#   - ** matches any number of directories
+#   - * matches any characters except /
+#   - One pattern per line
+#   - Lines starting with # are comments
+# ------------------------------------------------------------------------------
