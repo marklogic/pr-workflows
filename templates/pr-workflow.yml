@@ -21,3 +21,10 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+  trufflehog-scan:
+    name: TruffleHog Scan
+    uses: marklogic/pr-workflows/.github/workflows/trufflehog-scan.yml@main
+    permissions:
+      contents: read
+      
+  
