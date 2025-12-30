@@ -23,15 +23,37 @@ jobs:
         id: prep
         shell: bash
         run: |
-          ARGS="--json --fail"
-          # Only add exclude-paths if file exists
+          set -e
+          ARGS=""
+          
+          # Option 1: Regex patterns file (advanced users)
           if [ -f ".trufflehog-exclude" ]; then
-            ARGS="$ARGS --exclude-paths=.trufflehog-exclude"
-            echo "Using exclusion file: .trufflehog-exclude"
-          else
-            echo "No exclusion file found, scanning all files"
+            ARGS="--exclude-paths=.trufflehog-exclude"
+            echo "Using regex exclusions: .trufflehog-exclude"
           fi
-          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          
+          # Option 2: Glob patterns file (easier for most users)
+          if [ -f ".trufflehog-exclude-globs" ]; then
+            PATTERNS=$(grep -v '^#' .trufflehog-exclude-globs | grep -v '^[[:space:]]*$' | tr '\n' ',' | sed 's/,$//' || true)
+            if [ -n "$PATTERNS" ]; then
+              if [ -n "$ARGS" ]; then
+                ARGS="$ARGS --exclude-globs=$PATTERNS"
+              else
+                ARGS="--exclude-globs=$PATTERNS"
+              fi
+              echo "Using glob exclusions: $PATTERNS"
+            fi
+          fi
+          
+          if [ -z "$ARGS" ]; then
+            echo "No exclusion files found, scanning all files"
+          fi
+          
+          {
+            echo "args<<EOF"
+            echo "$ARGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       
       - name: Secret Scanning
         uses: trufflesecurity/trufflehog@main
@@ -41,29 +63,70 @@ jobs:
           extra_args: ${{ steps.prep.outputs.args }}
 
 # ------------------------------------------------------------------------------
-# HOW TO EXCLUDE FILES/FOLDERS
+# HOW TO EXCLUDE FILES/FOLDERS - TWO OPTIONS
 # ------------------------------------------------------------------------------
-# Create a .trufflehog-exclude file in your repository root with patterns:
 #
-# Example .trufflehog-exclude content:
+# OPTION 1 (RECOMMENDED): Glob Patterns - .trufflehog-exclude-globs
+# ------------------------------------------------------------------------------
+# Create a .trufflehog-exclude-globs file with glob patterns (one per line):
+#
+# Example .trufflehog-exclude-globs:
 #   # Exclude specific files
-#   path/to/file.txt
-#   config/secrets.example.env
+#   src/config.example.env
+#   tests/data/secrets.txt
 #
-#   # Exclude entire folders
+#   # Exclude by wildcard
+#   *.test.env
+#   *.example
+#   *.lock
+#
+#   # Exclude folders and subfolders
 #   tests/fixtures/**
 #   **/test_data/**
-#
-#   # Exclude by pattern
-#   *.test.env
-#   **/*.example
+#   node_modules/**
+#   dist/**
 #
 #   # Exclude documentation
 #   docs/**
+#   *.md
 #
-# Patterns follow .gitignore syntax:
-#   - ** matches any number of directories
+# Glob pattern rules:
+#   - ** matches any number of directories (recursive)
 #   - * matches any characters except /
 #   - One pattern per line
 #   - Lines starting with # are comments
+#
+# ------------------------------------------------------------------------------
+# OPTION 2 (ADVANCED): Regex Patterns - .trufflehog-exclude
+# ------------------------------------------------------------------------------
+# Create a .trufflehog-exclude file with regex patterns (one per line):
+#
+# Example .trufflehog-exclude:
+#   # Exclude specific files
+#   ^src/config\.example\.env$
+#   ^tests/data/secrets\.txt$
+#
+#   # Exclude by extension
+#   \.test\.env$
+#   \.example$
+#   \.lock$
+#
+#   # Exclude folders (any depth)
+#   ^tests/fixtures/
+#   /test_data/
+#   node_modules/
+#   ^dist/
+#
+#   # Exclude documentation
+#   ^docs/
+#   \.md$
+#
+# Regex pattern rules:
+#   - Use proper regex escaping (e.g., \. for literal dot)
+#   - ^ matches start of path, $ matches end
+#   - One pattern per line
+#   - Lines starting with # are comments
+#
+# ------------------------------------------------------------------------------
+# You can use both files simultaneously - patterns from both will be applied
 # ------------------------------------------------------------------------------
