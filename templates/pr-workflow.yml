@@ -26,5 +26,3 @@ jobs:
     uses: marklogic/pr-workflows/.github/workflows/trufflehog-scan.yml@main
     permissions:
       contents: read
-      
-  
