@@ -5,6 +5,11 @@ env:
   ORGANIZATION_JIRA_PROJECT_KEYS: "MLE,PDP,COR"
 
 on:
+  # Required for repository rulesets - works for PRs from forks
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+  # Also support being called as a reusable workflow
   workflow_call:
     inputs:
       pr-title:
