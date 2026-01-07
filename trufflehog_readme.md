@@ -5,10 +5,13 @@ Centralized GitHub Actions workflow that automatically scans all pull requests f
 ## Features
 
 - Scans only modified files in PRs (fast and efficient)
-- Works with PRs from forks
+- Works with PRs from forks (public and private)
 - Configurable exclusion patterns using regex
 - Supports org-level defaults with repo-level overrides
 - No workflow file needed in individual repos (uses org rulesets)
+- Posts PR comments with detailed findings when secrets are detected
+- Sets commit status to pass/fail for clear merge blocking
+- Classifies secrets as verified (confirmed active) or unverified (potential match)
 
 ## Setup
 ### Set Default Exclusions (Optional)
@@ -116,14 +119,29 @@ If no `TRUFFLEHOG_EXCLUDES` variable is set, these defaults apply:
 PR Created/Updated
        |
        v
-Ruleset Triggers Workflow
+Determine PR Type
        |
-       v
-Checkout Repository
-       |
-       v
-Check for TRUFFLEHOG_EXCLUDES variable
-       |
+       +------------------+------------------+
+       |                                     |
+       v                                     v
+   Fork PR                            Same-repo PR
+       |                                     |
+       v                                     v
+  pull_request_target               pull_request
+   trigger runs                     trigger runs
+       |                                     |
+       +------------------+------------------+
+                          |
+                          v
+              Checkout Base Repository
+                          |
+                          v
+              Fetch PR Head Commits
+         (using refs/pull/{number}/head)
+                          |
+                          v
+       Check for TRUFFLEHOG_EXCLUDES variable
+                          |
        +------------------+------------------+
        |                  |                  |
        v                  v                  v
@@ -148,25 +166,71 @@ Check for TRUFFLEHOG_EXCLUDES variable
         Secrets found           No secrets found
               |                       |
               v                       v
-        FAIL - PR blocked       PASS - PR allowed
+      Post PR comment          Set commit status
+      with findings               to success
+              |                       |
+              v                       v
+      Set commit status         PASS - PR allowed
+        to failure
+              |
+              v
+        FAIL - PR blocked
 ```
 
 **Scan scope:** Only files modified in the PR are scanned, not the entire repository.
 
+## Secret Classification
+
+TruffleHog classifies detected secrets into two categories:
+
+| Type | Description | Action |
+|------|-------------|--------|
+| **Verified** | Confirmed active/valid credentials | Blocks PR, requires immediate rotation |
+| **Unverified** | Potential secrets that couldn't be validated | Warning in logs, review recommended |
+
+## PR Comments
+
+When secrets are detected, the workflow automatically posts a comment on the PR with:
+- Link to workflow logs for detailed findings
+- Instructions for removing and rotating secrets
+- Information about file paths, line numbers, and secret types
+
+When no secrets are found, no comment is posted to keep the PR clean.
+
 ## Workflow Triggers
 
-| Trigger | When |
-|---------|------|
-| `pull_request` | PR opened, updated, or reopened |
-| `workflow_dispatch` | Manual run from Actions tab |
+The workflow uses dual triggers to handle both same-repo and fork PRs efficiently:
+
+| Trigger | Used For | Description |
+|---------|----------|-------------|
+| `pull_request` | Same-repo PRs | Standard trigger for PRs within the repository |
+| `pull_request_target` | Fork PRs | Runs in base repo context, works for private forks |
+| `workflow_dispatch` | Manual runs | Trigger manually from Actions tab |
+
+**Duplicate prevention:** The workflow includes logic to ensure only one trigger runs per PR:
+- Fork PRs: Only `pull_request_target` runs
+- Same-repo PRs: Only `pull_request` runs
+
+## Fork PR Support
+
+The workflow fully supports PRs from forked repositories:
+
+- Uses GitHub's `refs/pull/{number}/head` to fetch PR commits
+- Works with both public and private forks
+- No direct access to fork repository required
+- Runs immediately without requiring maintainer approval
 
 ## Viewing Results
 
 1. Go to the **Pull Request** > **Checks** tab
-2. Click **Scan PR for Secrets**
-3. View logs for:
+2. Look for **TruffleHog Secret Scan** commit status
+3. If secrets are found:
+   - A PR comment will be posted with remediation steps
+   - Click the status link to view detailed logs
+4. View logs for:
    - Applied exclusion patterns
-   - Detected secrets (file, line, type)
+   - Detected secrets (file, line, secret type)
+   - Verification status (verified = confirmed active)
 
 ## Handling Detected Secrets
 
