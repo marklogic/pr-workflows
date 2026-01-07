@@ -266,4 +266,4 @@ To run a scan manually:
 For issues or questions:
 - Check workflow run logs for detailed error messages
 - Review exclusion patterns for regex errors
-- Contact your PDP Pioneers's team
+- Contact your PDP Pioneers team
