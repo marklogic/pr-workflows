@@ -110,6 +110,49 @@ If no `TRUFFLEHOG_EXCLUDES` variable is set, these defaults apply:
 \.min\.css$
 ```
 
+## How It Works at Runtime
+
+```
+PR Created/Updated
+       |
+       v
+Ruleset Triggers Workflow
+       |
+       v
+Checkout Repository
+       |
+       v
+Check for TRUFFLEHOG_EXCLUDES variable
+       |
+       +------------------+------------------+
+       |                  |                  |
+       v                  v                  v
+  Repo variable      Org variable        Neither set
+    exists?            exists?                |
+       |                  |                   v
+       v                  v            Use DEFAULT_EXCLUDES
+    Use it             Use it          from workflow
+       |                  |                  |
+       +------------------+------------------+
+                          |
+                          v
+           Create .trufflehog-ignore file
+                          |
+                          v
+           Run TruffleHog scan on PR diff
+           (only modified files between base and head)
+                          |
+              +-----------+-----------+
+              |                       |
+              v                       v
+        Secrets found           No secrets found
+              |                       |
+              v                       v
+        FAIL - PR blocked       PASS - PR allowed
+```
+
+**Scan scope:** Only files modified in the PR are scanned, not the entire repository.
+
 ## Workflow Triggers
 
 | Trigger | When |
