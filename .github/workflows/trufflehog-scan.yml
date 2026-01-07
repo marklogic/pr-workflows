@@ -49,11 +49,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch PR head for forks
-        if: github.event.pull_request.head.repo.full_name != github.repository
+      - name: Fetch PR head commits
+        if: github.event_name != 'workflow_dispatch'
         run: |
-          git remote add fork ${{ github.event.pull_request.head.repo.clone_url }} || true
-          git fetch fork ${{ github.event.pull_request.head.ref }}:pr-head
+          # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
+          git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
+          echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
 
       - name: Setup exclude config
         id: config
