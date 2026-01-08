@@ -77,68 +77,18 @@ jobs:
 
       - name: TruffleHog Scan
         id: trufflehog
+        if: github.event_name != 'workflow_dispatch'
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --json --fail ${{ steps.config.outputs.exclude_args }}
-
-      - name: Capture scan output
-        id: capture
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          # Capture TruffleHog output from the action's output file if available
-          # The trufflehog action writes JSON to stdout, we need to parse workflow logs
-          # For now, we'll run trufflehog again to capture output to a file
-          echo "Running TruffleHog to capture detailed output..."
-          
-          # Install trufflehog CLI
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
-          
-          # Run scan and capture JSON output
-          trufflehog git file://. --since-commit=${{ github.event.pull_request.base.sha }} \
-            --branch=origin/pr-head --json --fail \
-            ${{ steps.config.outputs.exclude_args }} 2>/dev/null > trufflehog_results.json || true
-          
-          # Check if we have results
-          if [ -s trufflehog_results.json ]; then
-            echo "has_results=true" >> $GITHUB_OUTPUT
-            
-            # Parse JSON and create markdown table
-            # Each line is a separate JSON object
-            echo "| File | Line | Secret Type | Verified |" > findings_table.md
-            echo "|------|------|-------------|----------|" >> findings_table.md
-            
-            while IFS= read -r line; do
-              if [ -n "$line" ]; then
-                file=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.file // "N/A"')
-                line_num=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.line // "N/A"')
-                detector=$(echo "$line" | jq -r '.DetectorName // "Unknown"')
-                verified=$(echo "$line" | jq -r 'if .Verified then "Yes" else "No" end')
-                echo "| \`$file\` | $line_num | $detector | $verified |" >> findings_table.md
-              fi
-            done < trufflehog_results.json
-            
-            # Store table content for PR comment
-            findings_table=$(cat findings_table.md)
-            # Escape for GitHub Actions output
-            findings_table="${findings_table//'%'/'%25'}"
-            findings_table="${findings_table//$'\n'/'%0A'}"
-            findings_table="${findings_table//$'\r'/'%0D'}"
-            echo "findings_table<<EOF" >> $GITHUB_OUTPUT
-            cat findings_table.md >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-          else
-            echo "has_results=false" >> $GITHUB_OUTPUT
-            echo "findings_table=" >> $GITHUB_OUTPUT
-          fi
+          extra_args: --fail ${{ steps.config.outputs.exclude_args }}
 
       - name: Process scan results
         id: process
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Check if TruffleHog found any secrets
           if [ "${{ steps.trufflehog.outcome }}" == "failure" ]; then
             echo "has_secrets=true" >> $GITHUB_OUTPUT
             echo "status=failure" >> $GITHUB_OUTPUT
@@ -152,50 +102,31 @@ jobs:
       - name: Post PR comment on findings
         if: steps.process.outputs.has_secrets == 'true' && github.event_name != 'workflow_dispatch'
         uses: actions/github-script@v7
-        env:
-          FINDINGS_TABLE: ${{ steps.capture.outputs.findings_table }}
         with:
           script: |
             const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
-            const findingsTable = process.env.FINDINGS_TABLE || '';
-            
-            let findingsSection = '';
-            if (findingsTable && findingsTable.trim()) {
-              findingsSection = `
-            ### Detected Secrets
-
-            ${findingsTable}
-
-            > **Note:** "Verified = Yes" means the credential was confirmed to be active/valid.
-            `;
-            } else {
-              findingsSection = `
-            ### Finding Details
-            Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for:
-            - File paths containing secrets
-            - Line numbers
-            - Secret types (API key, password, token, etc.)
-            - Verification status (verified = confirmed active)
-            `;
-            }
             
             const body = `${commentMarker}
-            ## :rotating_light: Secret Scanning Alert
+## :rotating_light: Secret Scanning Alert
 
-            **TruffleHog detected potential secrets in this pull request.**
+**TruffleHog detected potential secrets in this pull request.**
 
-            ### What to do:
-            1. **Remove the exposed secret** from your code
-            2. **Rotate the credential immediately** - assume it's compromised
-            3. **Push the fix** to this branch
-            4. The scan will re-run automatically
-            ${findingsSection}
-            ### Workflow Logs
-            [View detailed scan logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+### What to do:
+1. **Remove the exposed secret** from your code
+2. **Rotate the credential immediately** - assume it's compromised
+3. **Push the fix** to this branch
+4. The scan will re-run automatically
 
-            ---
-            *This scan only checks files modified in this PR. Secrets are classified as **verified** (confirmed active) or **unverified** (potential match).*
-            `;
+### Finding Details
+Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for:
+- File paths containing secrets
+- Line numbers
+- Secret types (API key, password, token, etc.)
+- Verification status (verified = confirmed active)
+
+---
+*This scan only checks files modified in this PR. Secrets are classified as **verified** (confirmed active) or **unverified** (potential match).*
+`;
 
             // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
