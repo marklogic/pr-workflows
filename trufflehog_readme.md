@@ -88,14 +88,14 @@ Exclusions are configured via the `TRUFFLEHOG_EXCLUDES` variable using regex pat
 
 ## Override at Repository Level
 
-Individual repos can override org defaults:
+Individual repos can add additional exclusions on top of the defaults:
 
 1. Go to **Repository** > **Settings** > **Secrets and variables** > **Actions**
 2. Click **Variables** tab > **New repository variable**
 3. Name: `TRUFFLEHOG_EXCLUDES`
 4. Value: Your comma-separated regex patterns
 
-This completely replaces org-level patterns for that repository.
+**Exclusions are additive:** Your patterns are combined with the default exclusions. You don't need to repeat common patterns like `node_modules/` or `.lock` files.
 
 ## Default Exclusions
 
@@ -166,15 +166,22 @@ Determine PR Type
         Secrets found           No secrets found
               |                       |
               v                       v
-      Post PR comment          Set commit status
-      with findings               to success
-              |                       |
-              v                       v
-      Set commit status         PASS - PR allowed
-        to failure
-              |
-              v
-        FAIL - PR blocked
+      Post/Update PR           Check for previous
+      comment with               alert comment
+        findings                      |
+              |              +--------+--------+
+              |              |                 |
+              v              v                 v
+      Set commit status   Exists?           No comment
+        to failure           |             (clean PR)
+              |              v                 |
+              v         Update to             v
+        FAIL - PR       "Resolved"      Set commit status
+         blocked          status          to success
+                             |                 |
+                             v                 v
+                       Set commit        PASS - PR allowed
+                       to success
 ```
 
 **Scan scope:** Only files modified in the PR are scanned, not the entire repository.
@@ -190,12 +197,27 @@ TruffleHog classifies detected secrets into two categories:
 
 ## PR Comments
 
-When secrets are detected, the workflow automatically posts a comment on the PR with:
+The workflow manages PR comments to provide clear feedback throughout the remediation process:
+
+### When Secrets Are Detected
+
+A comment is posted with:
+- Commit SHA that was scanned
+- Timestamp of the scan
 - Link to workflow logs for detailed findings
 - Instructions for removing and rotating secrets
 - Information about file paths, line numbers, and secret types
 
-When no secrets are found, no comment is posted to keep the PR clean.
+### When Secrets Are Resolved
+
+If you fix the secrets and push again:
+- The **same comment is updated** to show a "Passed" status
+- Shows the new commit SHA that resolved the issue
+- Includes a reminder to rotate any previously exposed credentials
+
+### Clean PRs
+
+If a PR never had secrets detected, no comment is posted to keep the PR clean.
 
 ## Workflow Triggers
 
@@ -240,8 +262,9 @@ If the scan fails:
 2. **Rotate the secret** immediately (assume it's compromised)
 3. **Push the fix** to your PR branch
 4. Scan re-runs automatically
+5. PR comment updates to show "Resolved" status when fixed
 
-**For false positives:** Add the file/pattern to repo-level `TRUFFLEHOG_EXCLUDES` or request an update to org-level patterns.
+**For false positives:** Add the file/pattern to repo-level `TRUFFLEHOG_EXCLUDES` (patterns are additive to defaults).
 
 ## Manual Scan
 

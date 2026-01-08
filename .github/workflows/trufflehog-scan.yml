@@ -164,6 +164,57 @@ Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/
               });
             }
 
+      - name: Update PR comment when secrets resolved
+        if: steps.process.outputs.has_secrets == 'false' && github.event_name != 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
+            const commitSha = '${{ github.event.pull_request.head.sha }}';
+            const shortSha = commitSha.substring(0, 7);
+            const scanTime = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+            
+            // Check if there's an existing alert comment from a previous failed scan
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+            
+            const existing = comments.find(c => c.body && c.body.includes(commentMarker));
+            
+            // Only update if there was a previous alert - don't create new comments for clean scans
+            if (existing) {
+              const resolvedBody = `${commentMarker}
+## :white_check_mark: Secret Scanning Passed
+
+**Previously detected secrets have been resolved.**
+
+| Scan Details | |
+|--------------|---|
+| **Commit** | [\`${shortSha}\`](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}) |
+| **Scanned At** | ${scanTime} |
+| **Workflow Run** | [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+The secrets flagged in previous scans are no longer detected in the modified files.
+
+---
+*This PR is now clear of detected secrets. Remember to rotate any credentials that were previously exposed.*
+`;
+              
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: resolvedBody
+              });
+              
+              console.log('Updated existing alert comment to show resolved status');
+            } else {
+              console.log('No previous alert comment found - scan passed cleanly');
+            }
+
       - name: Set commit status
         if: github.event_name != 'workflow_dispatch'
         uses: actions/github-script@v7
