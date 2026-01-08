@@ -77,18 +77,18 @@ jobs:
 
       - name: TruffleHog Scan
         id: trufflehog
-        if: github.event_name != 'workflow_dispatch'
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --fail ${{ steps.config.outputs.exclude_args }}
+          extra_args: --json ${{ steps.config.outputs.exclude_args }}
 
       - name: Process scan results
         id: process
         if: github.event_name != 'workflow_dispatch'
         run: |
+          # Check if TruffleHog found any secrets
           if [ "${{ steps.trufflehog.outcome }}" == "failure" ]; then
             echo "has_secrets=true" >> $GITHUB_OUTPUT
             echo "status=failure" >> $GITHUB_OUTPUT
@@ -105,28 +105,27 @@ jobs:
         with:
           script: |
             const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
-            
             const body = `${commentMarker}
-## :rotating_light: Secret Scanning Alert
+            ## :rotating_light: Secret Scanning Alert
 
-**TruffleHog detected potential secrets in this pull request.**
+            **TruffleHog detected potential secrets in this pull request.**
 
-### What to do:
-1. **Remove the exposed secret** from your code
-2. **Rotate the credential immediately** - assume it's compromised
-3. **Push the fix** to this branch
-4. The scan will re-run automatically
+            ### What to do:
+            1. **Review the workflow logs** for detailed findings (file, line number, secret type)
+            2. **Remove the exposed secret** from your code
+            3. **Rotate the credential immediately** - assume it's compromised
+            4. **Push the fix** to this branch
 
-### Finding Details
-Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for:
-- File paths containing secrets
-- Line numbers
-- Secret types (API key, password, token, etc.)
-- Verification status (verified = confirmed active)
+            ### Finding Details
+            Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for:
+            - File paths containing secrets
+            - Line numbers
+            - Secret types (API key, password, token, etc.)
+            - Verification status (verified = confirmed active)
 
----
-*This scan only checks files modified in this PR. Secrets are classified as **verified** (confirmed active) or **unverified** (potential match).*
-`;
+            ---
+            *This scan only checks files modified in this PR. Secrets are classified as **verified** (confirmed active) or **unverified** (potential match).*
+            `;
 
             // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
