@@ -174,10 +174,13 @@ jobs:
             
             let body;
             if (!hasSecrets) {
-              // No secrets found - post success message or update existing warning
+              // No secrets found
               if (existing) {
-                // Update existing comment to show issue is resolved
-                body = `${commentMarker}
+                // Check if existing comment was a critical/blocking one (had verified secrets)
+                const wasBlocking = existing.body.includes('CRITICAL') || existing.body.includes(':rotating_light:');
+                if (wasBlocking) {
+                  // Update to show verified secrets are now resolved
+                  body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
 
             **No secrets detected in this pull request.**
@@ -189,12 +192,14 @@ jobs:
             ---
             *This comment will be updated if new secrets are detected in future commits.*
             `;
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                  body: body
-                });
+                  await github.rest.issues.updateComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: existing.id,
+                    body: body
+                  });
+                }
+                // If it was just a warning (unverified only), leave it as-is
               }
               // If no existing comment and no secrets, don't post anything
               return;
