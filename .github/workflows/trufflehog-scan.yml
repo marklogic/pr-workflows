@@ -52,15 +52,17 @@ jobs:
       - name: Setup exclude config
         id: config
         run: |
-          if [ -n "${{ vars.TRUFFLEHOG_EXCLUDES }}" ]; then
-            echo "Using repo/org-level TRUFFLEHOG_EXCLUDES variable"
-            # Support both comma-separated and newline-separated patterns
-            echo "${{ vars.TRUFFLEHOG_EXCLUDES }}" | tr ',' '\n' | sed '/^$/d' > .trufflehog-ignore
-          else
-            echo "Using default exclusions from central workflow"
-            cat << 'EOF' > .trufflehog-ignore
+          # Always include default exclusions
+          echo "Adding default exclusions"
+          cat << 'EOF' > .trufflehog-ignore
           ${{ env.DEFAULT_EXCLUDES }}
           EOF
+          
+          # Append repo/org-level custom exclusions if defined
+          if [ -n "${{ vars.TRUFFLEHOG_EXCLUDES }}" ]; then
+            echo "Adding repo/org-level TRUFFLEHOG_EXCLUDES patterns"
+            # Support both comma-separated and newline-separated patterns
+            echo "${{ vars.TRUFFLEHOG_EXCLUDES }}" | tr ',' '\n' | sed '/^$/d' >> .trufflehog-ignore
           fi
           
           echo "Exclusion patterns:"
@@ -97,10 +99,14 @@ jobs:
         with:
           script: |
             const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
+            const commitSha = '${{ github.event.pull_request.head.sha }}';
+            const shortSha = commitSha.substring(0, 7);
             const body = `${commentMarker}
             ## :rotating_light: Secret Scanning Alert
 
             **TruffleHog detected potential secrets in this pull request.**
+
+            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
 
             ### What to do:
             1. **Review the workflow logs** for detailed findings (file, line number, secret type)
