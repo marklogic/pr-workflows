@@ -82,33 +82,15 @@ jobs:
         id: process
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Check TruffleHog exit code
-          # Exit code 183 = secrets found, other non-zero = scan error
+          # TruffleHog exit codes:
+          # 0 = no secrets found
+          # 183 = secrets found  
+          # other = error
+          # With continue-on-error, outcome is "failure" for any non-zero exit
           if [ "${{ steps.trufflehog.outcome }}" == "failure" ]; then
-            # Run a quick verification scan to confirm secrets vs error
-            curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
-            
-            # Run scan without --fail to get clean exit
-            set +e
-            trufflehog git file://. \
-              --since-commit=${{ github.event.pull_request.base.sha }} \
-              --branch=origin/pr-head \
-              --json \
-              --no-update \
-              ${{ steps.config.outputs.exclude_args }} > /tmp/results.json 2>&1
-            scan_exit=$?
-            set -e
-            
-            # Check if results file has actual findings
-            if [ -s /tmp/results.json ] && grep -q "DetectorName" /tmp/results.json; then
-              echo "has_secrets=true" >> $GITHUB_OUTPUT
-              echo "status=failure" >> $GITHUB_OUTPUT
-              echo "description=Secret scanning found exposed credentials" >> $GITHUB_OUTPUT
-            else
-              echo "has_secrets=false" >> $GITHUB_OUTPUT
-              echo "status=success" >> $GITHUB_OUTPUT
-              echo "description=No secrets detected in PR changes" >> $GITHUB_OUTPUT
-            fi
+            echo "has_secrets=true" >> $GITHUB_OUTPUT
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "description=Secret scanning found exposed credentials" >> $GITHUB_OUTPUT
           else
             echo "has_secrets=false" >> $GITHUB_OUTPUT
             echo "status=success" >> $GITHUB_OUTPUT
