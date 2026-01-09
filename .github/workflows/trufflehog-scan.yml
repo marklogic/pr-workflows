@@ -78,6 +78,47 @@ jobs:
           head: ${{ github.event.pull_request.head.sha }}
           extra_args: --json ${{ steps.config.outputs.exclude_args }}
 
+      - name: Parse scan results
+        id: parse
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          # Capture TruffleHog JSON output by re-running with same args
+          # Store results for annotation generation
+          echo "Parsing TruffleHog results..."
+          
+          SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
+            ghcr.io/trufflesecurity/trufflehog:latest \
+            git file:///tmp/ \
+            --since-commit ${{ github.event.pull_request.base.sha }} \
+            --branch ${{ github.event.pull_request.head.sha }} \
+            --json \
+            ${{ steps.config.outputs.exclude_args }} \
+            --no-update 2>/dev/null || true)
+          
+          # Parse JSON lines and create GitHub annotations
+          if [ -n "$SCAN_OUTPUT" ]; then
+            echo "$SCAN_OUTPUT" | while IFS= read -r line; do
+              # Skip non-JSON lines (info logs)
+              if ! echo "$line" | jq -e '.DetectorName' > /dev/null 2>&1; then
+                continue
+              fi
+              
+              FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.file // "unknown"')
+              LINE_NUM=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.line // 1')
+              DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
+              VERIFIED=$(echo "$line" | jq -r '.Verified // false')
+              
+              if [ "$VERIFIED" == "true" ]; then
+                STATUS="VERIFIED - Active credential"
+              else
+                STATUS="Unverified - Potential secret"
+              fi
+              
+              # Create file-specific annotation
+              echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} detected::${STATUS}: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Remove this secret and rotate the credential immediately."
+            done
+          fi
+
       - name: Process scan results
         id: process
         if: github.event_name != 'workflow_dispatch'
