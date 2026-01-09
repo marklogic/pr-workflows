@@ -16,6 +16,18 @@ Centralized GitHub Actions workflow that automatically scans all pull requests f
 - Classifies secrets as verified (confirmed active) or unverified (potential match)
 
 ## Setup
+
+### Required Permissions
+
+The workflow requires these GitHub token permissions:
+
+| Permission | Access | Purpose |
+|------------|--------|----------|
+| `contents` | read | Checkout repository and fetch PR commits |
+| `pull-requests` | write | Post and update PR comments |
+
+These are configured in the workflow file and apply automatically.
+
 ### Set Default Exclusions (Optional)
 
 Set organization-wide exclusion patterns:
@@ -151,22 +163,29 @@ Parse results and create annotations
   secrets found       secrets only          found
        |                  |                  |
        v                  v                  v
-  Error annotations   Warning annotations  Check for
-  on files            on files            previous comment
+  Error annotations   Warning annotations  Check for previous
+  (red) on files      (yellow) on files   CRITICAL comment
        |                  |                  |
        v                  v            +-----+-----+
   Post CRITICAL       Post Warning    |           |
   PR comment          PR comment      v           v
-  (blocking)          (non-blocking)  Was it    No previous
-       |                  |           CRITICAL?   comment
+  (blocking)          (non-blocking)  Was         Not blocking
+       |                  |           CRITICAL?    or no comment
        v                  v              |           |
   FAIL workflow       PASS workflow     v           v
-  PR blocked          PR can proceed  Update to   Do nothing
-                                      "Passed"    (clean PR)
-                                         |
+  PR blocked          PR allowed     Update to   Do nothing
+                                     "Passed"    (keep warning
+                                         |       if exists)
                                          v
                                     PASS workflow
 ```
+
+**Key behaviors:**
+- **Verified secrets** → Error annotations + CRITICAL comment + workflow fails
+- **Unverified only** → Warning annotations + Warning comment + workflow passes
+- **Clean after CRITICAL** → Comment updated to "Passed"
+- **Clean after Warning** → Warning comment stays (for visibility)
+- **Always clean** → No comment posted
 
 **Scan scope:** Only files modified in the PR are scanned, not the entire repository.
 
@@ -276,11 +295,16 @@ The workflow fully supports PRs from forked repositories:
 ## Viewing Results
 
 1. Go to the **Pull Request** > **Checks** tab
-2. Look for **TruffleHog Secret Scan** commit status
-3. If secrets are found:
-   - A PR comment will be posted with remediation steps
-   - Click the status link to view detailed logs
-4. View logs for:
+2. Look for **TruffleHog Secret Scan / Scan PR for Secrets**
+3. Check the workflow result:
+   - **Failed** = Verified secrets found (PR blocked)
+   - **Passed with warnings** = Only unverified secrets (review recommended)
+   - **Passed** = No secrets detected
+4. If secrets are found:
+   - Check the **Annotations** panel for file/line locations
+   - Review the PR comment for remediation steps
+   - Click the workflow link to view detailed logs
+5. Logs show:
    - Applied exclusion patterns
    - Detected secrets (file, line, secret type)
    - Verification status (verified = confirmed active)
