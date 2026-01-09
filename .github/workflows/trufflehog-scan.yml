@@ -60,17 +60,18 @@ jobs:
 
       - name: Setup exclude config
         id: config
+        env:
+          DEFAULT_PATTERNS: ${{ env.DEFAULT_EXCLUDES }}
+          USER_PATTERNS: ${{ vars.TRUFFLEHOG_EXCLUDES }}
         run: |
-          # Always include default exclusions first
+          # Write default exclusions
           echo "Adding default exclusions..."
-          cat << 'EOF' > .trufflehog-ignore
-          ${{ env.DEFAULT_EXCLUDES }}
-          EOF
+          echo "$DEFAULT_PATTERNS" > .trufflehog-ignore
           
           # Append user-defined exclusions if set (additive, not replacement)
-          if [ -n "${{ vars.TRUFFLEHOG_EXCLUDES }}" ]; then
+          if [ -n "$USER_PATTERNS" ]; then
             echo "Adding repo/org-level TRUFFLEHOG_EXCLUDES patterns..."
-            echo "${{ vars.TRUFFLEHOG_EXCLUDES }}" | tr ',' '\n' | sed '/^$/d' >> .trufflehog-ignore
+            echo "$USER_PATTERNS" | tr ',' '\n' | sed '/^$/d' >> .trufflehog-ignore
           fi
           
           echo "Exclusion patterns:"
