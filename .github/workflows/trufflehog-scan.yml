@@ -150,17 +150,57 @@ jobs:
           fi
 
       - name: Post PR comment on findings
-        if: steps.process.outputs.has_secrets == 'true' && github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/github-script@v7
         with:
           script: |
             const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
             const commitSha = '${{ github.event.pull_request.head.sha }}';
             const shortSha = commitSha.substring(0, 7);
+            const hasSecrets = '${{ steps.process.outputs.has_secrets }}' === 'true';
             const hasVerified = '${{ steps.process.outputs.has_verified }}' === 'true';
             const verifiedCount = '${{ steps.parse.outputs.verified_count }}' || '0';
             const unverifiedCount = '${{ steps.parse.outputs.unverified_count }}' || '0';
             
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+            
+            const existing = comments.find(c => c.body && c.body.includes(commentMarker));
+            
+            let body;
+            if (!hasSecrets) {
+              // No secrets found - post success message or update existing warning
+              if (existing) {
+                // Update existing comment to show issue is resolved
+                body = `${commentMarker}
+            ## :white_check_mark: Secret Scanning Passed
+
+            **No secrets detected in this pull request.**
+
+            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
+
+            Previous issues have been resolved. Thank you for addressing the security concerns!
+
+            ---
+            *This comment will be updated if new secrets are detected in future commits.*
+            `;
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body: body
+                });
+              }
+              // If no existing comment and no secrets, don't post anything
+              return;
+            }
+            
+            // Secrets found - create or update warning comment
             let severity, icon, action;
             if (hasVerified) {
               severity = 'CRITICAL';
@@ -172,7 +212,7 @@ jobs:
               action = 'This PR can proceed, but please review the potential secrets below.';
             }
             
-            const body = `${commentMarker}
+            body = `${commentMarker}
             ## ${icon} Secret Scanning ${severity}
 
             **TruffleHog scan results:**
@@ -200,16 +240,6 @@ jobs:
             ---
             *Verified secrets are confirmed active by TruffleHog. Unverified secrets match known patterns but couldn't be validated.*
             `;
-
-            // Find existing comment
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              per_page: 100
-            });
-            
-            const existing = comments.find(c => c.body && c.body.includes(commentMarker));
             
             if (existing) {
               await github.rest.issues.updateComment({
