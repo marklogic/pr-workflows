@@ -34,10 +34,11 @@ Set organization-wide exclusion patterns:
 
 Exclusions are configured via the `TRUFFLEHOG_EXCLUDES` variable using regex patterns.
 
-**Priority order:**
-1. Repository-level variable (highest priority)
-2. Organization-level variable
-3. Workflow defaults (if no variable set)
+**How it works:**
+- Default exclusions are **always applied** (node_modules, lock files, etc.)
+- Repository-level patterns are **added on top** of defaults
+- Organization-level patterns are **added on top** of defaults
+- You never lose the base coverage when adding custom patterns
 
 ### Pattern Reference
 
@@ -95,11 +96,11 @@ Individual repos can add additional exclusions on top of the defaults:
 3. Name: `TRUFFLEHOG_EXCLUDES`
 4. Value: Your comma-separated regex patterns
 
-**Exclusions are additive:** Your patterns are combined with the default exclusions. You don't need to repeat common patterns like `node_modules/` or `.lock` files.
+**Exclusions are always additive:** Your patterns are appended to the default exclusions. You don't need to repeat common patterns like `node_modules/` or `.lock` files since they're always included.
 
 ## Default Exclusions
 
-If no `TRUFFLEHOG_EXCLUDES` variable is set, these defaults apply:
+These default exclusions are **always applied**, regardless of whether custom patterns are defined:
 
 ```
 ^node_modules/
@@ -113,48 +114,45 @@ If no `TRUFFLEHOG_EXCLUDES` variable is set, these defaults apply:
 \.min\.css$
 ```
 
+Any patterns you add via `TRUFFLEHOG_EXCLUDES` are appended to this list.
+
 ## How It Works at Runtime
 
 ```
 PR Created/Updated
        |
        v
-Determine PR Type
+pull_request_target trigger
+(works for both fork and same-repo PRs)
        |
-       +------------------+------------------+
-       |                                     |
-       v                                     v
-   Fork PR                            Same-repo PR
-       |                                     |
-       v                                     v
-  pull_request_target               pull_request
-   trigger runs                     trigger runs
-       |                                     |
-       +------------------+------------------+
-                          |
-                          v
-              Checkout Base Repository
-                          |
-                          v
-              Fetch PR Head Commits
-         (using refs/pull/{number}/head)
-                          |
-                          v
-       Check for TRUFFLEHOG_EXCLUDES variable
-                          |
+       v
+Checkout Base Repository
+       |
+       v
+Fetch PR Head Commits
+(using refs/pull/{number}/head)
+       |
+       v
+Load Default Exclusions
+       |
+       v
+Check for TRUFFLEHOG_EXCLUDES variable
+       |
        +------------------+------------------+
        |                  |                  |
        v                  v                  v
   Repo variable      Org variable        Neither set
     exists?            exists?                |
        |                  |                   v
-       v                  v            Use DEFAULT_EXCLUDES
-    Use it             Use it          from workflow
+       v                  v            Use defaults only
+  Append to           Append to              |
+   defaults            defaults              |
        |                  |                  |
        +------------------+------------------+
                           |
                           v
            Create .trufflehog-ignore file
+           (defaults + custom patterns)
                           |
                           v
            Run TruffleHog scan on PR diff
@@ -168,8 +166,8 @@ Determine PR Type
               v                       v
       Post/Update PR           Check for previous
       comment with               alert comment
-        findings                      |
-              |              +--------+--------+
+      scanned commit                  |
+        SHA + findings       +--------+--------+
               |              |                 |
               v              v                 v
       Set commit status   Exists?           No comment
@@ -202,8 +200,7 @@ The workflow manages PR comments to provide clear feedback throughout the remedi
 ### When Secrets Are Detected
 
 A comment is posted with:
-- Commit SHA that was scanned
-- Timestamp of the scan
+- **Scanned commit SHA** (short hash with link to full commit) so you can verify the scan ran on your latest changes
 - Link to workflow logs for detailed findings
 - Instructions for removing and rotating secrets
 - Information about file paths, line numbers, and secret types
@@ -221,17 +218,18 @@ If a PR never had secrets detected, no comment is posted to keep the PR clean.
 
 ## Workflow Triggers
 
-The workflow uses dual triggers to handle both same-repo and fork PRs efficiently:
+The workflow uses `pull_request_target` to handle all PR types with a single trigger:
 
 | Trigger | Used For | Description |
 |---------|----------|-------------|
-| `pull_request` | Same-repo PRs | Standard trigger for PRs within the repository |
-| `pull_request_target` | Fork PRs | Runs in base repo context, works for private forks |
+| `pull_request_target` | All PRs | Runs in base repo context, works for both same-repo and fork PRs |
 | `workflow_dispatch` | Manual runs | Trigger manually from Actions tab |
 
-**Duplicate prevention:** The workflow includes logic to ensure only one trigger runs per PR:
-- Fork PRs: Only `pull_request_target` runs
-- Same-repo PRs: Only `pull_request` runs
+**Why `pull_request_target`?**
+- Works for both same-repo branches and forks
+- Only one workflow run per PR (no duplicate or skipped checks)
+- Runs workflow code from the base branch (more secure for secret scanning)
+- PR commits are fetched via `refs/pull/{number}/head`
 
 ## Fork PR Support
 

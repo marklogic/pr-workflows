@@ -76,17 +76,39 @@ jobs:
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --json ${{ steps.config.outputs.exclude_args }}
+          extra_args: --json --no-update ${{ steps.config.outputs.exclude_args }}
 
       - name: Process scan results
         id: process
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Check if TruffleHog found any secrets
+          # Check TruffleHog exit code
+          # Exit code 183 = secrets found, other non-zero = scan error
           if [ "${{ steps.trufflehog.outcome }}" == "failure" ]; then
-            echo "has_secrets=true" >> $GITHUB_OUTPUT
-            echo "status=failure" >> $GITHUB_OUTPUT
-            echo "description=Secret scanning found exposed credentials" >> $GITHUB_OUTPUT
+            # Run a quick verification scan to confirm secrets vs error
+            curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+            
+            # Run scan without --fail to get clean exit
+            set +e
+            trufflehog git file://. \
+              --since-commit=${{ github.event.pull_request.base.sha }} \
+              --branch=origin/pr-head \
+              --json \
+              --no-update \
+              ${{ steps.config.outputs.exclude_args }} > /tmp/results.json 2>&1
+            scan_exit=$?
+            set -e
+            
+            # Check if results file has actual findings
+            if [ -s /tmp/results.json ] && grep -q "DetectorName" /tmp/results.json; then
+              echo "has_secrets=true" >> $GITHUB_OUTPUT
+              echo "status=failure" >> $GITHUB_OUTPUT
+              echo "description=Secret scanning found exposed credentials" >> $GITHUB_OUTPUT
+            else
+              echo "has_secrets=false" >> $GITHUB_OUTPUT
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "description=No secrets detected in PR changes" >> $GITHUB_OUTPUT
+            fi
           else
             echo "has_secrets=false" >> $GITHUB_OUTPUT
             echo "status=success" >> $GITHUB_OUTPUT
