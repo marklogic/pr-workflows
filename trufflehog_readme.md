@@ -9,8 +9,10 @@ Centralized GitHub Actions workflow that automatically scans all pull requests f
 - Configurable exclusion patterns using regex
 - Supports org-level defaults with repo-level overrides
 - No workflow file needed in individual repos (uses org rulesets)
-- Posts PR comments with detailed findings when secrets are detected
-- Sets commit status to pass/fail for clear merge blocking
+- **Verified secrets block the PR** - confirmed active credentials must be removed
+- **Unverified secrets allow PR to proceed** - warnings shown for review
+- Posts PR comments with detailed findings (updated when issues are resolved)
+- Creates file-level annotations pointing to exact secret locations
 - Classifies secrets as verified (confirmed active) or unverified (potential match)
 
 ## Setup
@@ -133,53 +135,37 @@ Fetch PR Head Commits
 (using refs/pull/{number}/head)
        |
        v
-Load Default Exclusions
+Load Default Exclusions + Custom Patterns
        |
        v
-Check for TRUFFLEHOG_EXCLUDES variable
+Run TruffleHog scan on PR diff
+(only modified files between base and head)
+       |
+       v
+Parse results and create annotations
        |
        +------------------+------------------+
        |                  |                  |
        v                  v                  v
-  Repo variable      Org variable        Neither set
-    exists?            exists?                |
-       |                  |                   v
-       v                  v            Use defaults only
-  Append to           Append to              |
-   defaults            defaults              |
+  Verified            Unverified          No secrets
+  secrets found       secrets only          found
        |                  |                  |
-       +------------------+------------------+
-                          |
-                          v
-           Create .trufflehog-ignore file
-           (defaults + custom patterns)
-                          |
-                          v
-           Run TruffleHog scan on PR diff
-           (only modified files between base and head)
-                          |
-              +-----------+-----------+
-              |                       |
-              v                       v
-        Secrets found           No secrets found
-              |                       |
-              v                       v
-      Post/Update PR           Check for previous
-      comment with               alert comment
-      scanned commit                  |
-        SHA + findings       +--------+--------+
-              |              |                 |
-              v              v                 v
-      Set commit status   Exists?           No comment
-        to failure           |             (clean PR)
-              |              v                 |
-              v         Update to             v
-        FAIL - PR       "Resolved"      Set commit status
-         blocked          status          to success
-                             |                 |
-                             v                 v
-                       Set commit        PASS - PR allowed
-                       to success
+       v                  v                  v
+  Error annotations   Warning annotations  Check for
+  on files            on files            previous comment
+       |                  |                  |
+       v                  v            +-----+-----+
+  Post CRITICAL       Post Warning    |           |
+  PR comment          PR comment      v           v
+  (blocking)          (non-blocking)  Was it    No previous
+       |                  |           CRITICAL?   comment
+       v                  v              |           |
+  FAIL workflow       PASS workflow     v           v
+  PR blocked          PR can proceed  Update to   Do nothing
+                                      "Passed"    (clean PR)
+                                         |
+                                         v
+                                    PASS workflow
 ```
 
 **Scan scope:** Only files modified in the PR are scanned, not the entire repository.
@@ -188,33 +174,80 @@ Check for TRUFFLEHOG_EXCLUDES variable
 
 TruffleHog classifies detected secrets into two categories:
 
-| Type | Description | Action |
-|------|-------------|--------|
-| **Verified** | Confirmed active/valid credentials | Blocks PR, requires immediate rotation |
-| **Unverified** | Potential secrets that couldn't be validated | Warning in logs, review recommended |
+| Type | Description | Workflow Result | PR Status |
+|------|-------------|-----------------|-----------|
+| **Verified** | Confirmed active/valid credentials | **Fails** | Blocked until fixed |
+| **Unverified** | Potential secrets that couldn't be validated | **Passes** | Can proceed (review recommended) |
+
+### Behavior Summary
+
+| Scenario | Workflow | PR Comment | Annotations |
+|----------|----------|------------|-------------|
+| Verified secrets found | Fails | Critical alert posted | Error annotations on files |
+| Only unverified secrets | Passes | Warning posted | Warning annotations on files |
+| No secrets detected | Passes | No comment (or updates to "Passed" if previously blocked) | None |
+
+**Why this approach?**
+- **Verified secrets** are confirmed active credentials that pose immediate risk and must be removed
+- **Unverified secrets** match known patterns but couldn't be validated (may be false positives, test data, or inactive credentials)
+- Blocking only on verified secrets reduces friction while still catching real exposures
 
 ## PR Comments
 
 The workflow manages PR comments to provide clear feedback throughout the remediation process:
 
-### When Secrets Are Detected
+### When Verified Secrets Are Detected (Blocking)
 
-A comment is posted with:
-- **Scanned commit SHA** (short hash with link to full commit) so you can verify the scan ran on your latest changes
-- Link to workflow logs for detailed findings
+A **CRITICAL** comment is posted with:
+- Red alert icon
+- Count of verified vs unverified secrets
+- **Scanned commit SHA** (short hash with link to full commit)
+- Clear message that PR is blocked
 - Instructions for removing and rotating secrets
-- Information about file paths, line numbers, and secret types
+- Link to workflow logs for file paths and line numbers
 
-### When Secrets Are Resolved
+### When Only Unverified Secrets Are Detected (Non-blocking)
 
-If you fix the secrets and push again:
+A **Warning** comment is posted with:
+- Warning icon
+- Count of unverified secrets
+- **Scanned commit SHA**
+- Message that PR can proceed but review is recommended
+- Same remediation instructions
+
+### When Verified Secrets Are Resolved
+
+If you fix verified secrets and push again:
 - The **same comment is updated** to show a "Passed" status
 - Shows the new commit SHA that resolved the issue
-- Includes a reminder to rotate any previously exposed credentials
+- Thanks the contributor for addressing security concerns
+
+### Unverified Warnings Persist
+
+If only unverified secrets were found and you push new commits:
+- The warning comment **stays as-is** (no override)
+- This ensures the warning remains visible for review
+- The workflow still passes
 
 ### Clean PRs
 
 If a PR never had secrets detected, no comment is posted to keep the PR clean.
+
+## Annotations
+
+The workflow creates GitHub annotations that point to exact locations in your code:
+
+| Secret Type | Annotation Level | Appears In |
+|-------------|------------------|------------|
+| Verified | Error (red) | Files changed tab, Annotations panel |
+| Unverified | Warning (yellow) | Files changed tab, Annotations panel |
+
+Annotations include:
+- File path
+- Line number
+- Secret type (e.g., AWS, Slack, Postgres)
+- Verification status
+- Remediation guidance
 
 ## Workflow Triggers
 
@@ -254,15 +287,33 @@ The workflow fully supports PRs from forked repositories:
 
 ## Handling Detected Secrets
 
-If the scan fails:
+### Verified Secrets (PR Blocked)
 
-1. **Remove the secret** from your code
-2. **Rotate the secret** immediately (assume it's compromised)
-3. **Push the fix** to your PR branch
-4. Scan re-runs automatically
-5. PR comment updates to show "Resolved" status when fixed
+If verified secrets are detected:
 
-**For false positives:** Add the file/pattern to repo-level `TRUFFLEHOG_EXCLUDES` (patterns are additive to defaults).
+1. **PR is blocked** - cannot be merged until fixed
+2. **Remove the secret** from your code
+3. **Rotate the secret immediately** - assume it's compromised
+4. **Push the fix** to your PR branch
+5. Scan re-runs automatically
+6. PR comment updates to show "Passed" status when fixed
+
+### Unverified Secrets (PR Can Proceed)
+
+If only unverified secrets are detected:
+
+1. **PR can still be merged** - workflow passes
+2. **Review the warnings** - check if they're real credentials
+3. If real: remove and rotate as above
+4. If false positive: add pattern to `TRUFFLEHOG_EXCLUDES`
+5. Warning comment remains visible for awareness
+
+### False Positives
+
+To exclude files/patterns that trigger false positives:
+- Add the pattern to repo-level `TRUFFLEHOG_EXCLUDES`
+- Patterns are additive to defaults
+- See [Exclusion Patterns](#exclusion-patterns) for syntax
 
 ## Manual Scan
 
