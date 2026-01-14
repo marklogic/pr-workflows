@@ -33,22 +33,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Configure Git to disable rename detection
+      - name: Configure Git for rename detection
         run: |
           git config --global diff.renames false
           git config --global diff.renameLimit 0
+          echo "Git configured to treat renames as delete+add"
 
       - name: Debug - Show files changed in PR
         if: github.event_name != 'workflow_dispatch'
         run: |
-          echo "=== Files changed in this PR (renames shown as delete+add) ==="
+          echo "========================================"
+          echo "FILES CHANGED (BASE vs HEAD)"
+          echo "========================================"
           git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
           echo ""
-          echo "=== File list with line counts ==="
-          git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
-          echo ""
-          echo "=== Total files changed: ==="
-          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l
+          echo "Total: $(git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l) files"
+          echo "========================================"
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
@@ -86,15 +86,12 @@ jobs:
         id: parse
         if: github.event_name != 'workflow_dispatch'
         run: |
-          echo "Parsing TruffleHog results..."
+          echo "========================================"
+          echo "SCANNING PR CHANGES"
+          echo "========================================"
           
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
-          
-          echo "=== TruffleHog scanning PR changes (renamed files as delete+add) ==="
-          echo "Base commit: ${{ github.event.pull_request.base.sha }}"
-          echo "Head commit: ${{ github.event.pull_request.head.sha }}"
-          echo ""
           
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
             -e GIT_CONFIG_COUNT=2 \
@@ -108,19 +105,19 @@ jobs:
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
-            --no-update --debug 2>&1 || true)
+            --no-update 2>&1 || true)
           
-          echo "=== Files scanned by TruffleHog ==="
+          echo "========================================"
+          echo "FILES SCANNED BY TRUFFLEHOG"
+          echo "========================================"
           SCANNED_FILES=$(echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u 2>/dev/null || echo "")
           if [ -n "$SCANNED_FILES" ]; then
             echo "$SCANNED_FILES"
           else
-            echo "No files with secrets found. TruffleHog scanned changed files but found no secrets."
-            echo ""
-            echo "=== Changed files that were scanned ==="
+            echo "No secrets found. Files that were scanned:"
             git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
           fi
-          echo ""
+          echo "========================================"
           
           if [ -n "$SCAN_OUTPUT" ]; then
             while IFS= read -r line; do
@@ -133,7 +130,7 @@ jobs:
               DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
               VERIFIED=$(echo "$line" | jq -r '.Verified // false')
               
-              echo "Found secret: ${DETECTOR} in ${FILE}:${LINE_NUM} (Verified: ${VERIFIED})"
+              echo "Found: ${DETECTOR} in ${FILE}:${LINE_NUM} (Verified: ${VERIFIED})"
               
               if [ "$VERIFIED" == "true" ]; then
                 VERIFIED_COUNT=$((VERIFIED_COUNT + 1))
@@ -145,9 +142,11 @@ jobs:
             done <<< "$SCAN_OUTPUT"
           fi
           
+          echo ""
+          echo "Verified: ${VERIFIED_COUNT}, Unverified: ${UNVERIFIED_COUNT}"
+          
           echo "verified_count=${VERIFIED_COUNT}" >> $GITHUB_OUTPUT
           echo "unverified_count=${UNVERIFIED_COUNT}" >> $GITHUB_OUTPUT
-          echo "Scan complete: ${VERIFIED_COUNT} verified, ${UNVERIFIED_COUNT} unverified secrets found"
 
       - name: Process scan results
         id: process
