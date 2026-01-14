@@ -33,14 +33,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      - name: Configure Git to disable rename detection
+        run: |
+          git config --global diff.renames false
+          git config --global diff.renameLimit 0
+
       - name: Debug - Show files changed in PR
         if: github.event_name != 'workflow_dispatch'
         run: |
-          echo "=== Files changed in this PR (including renames) ==="
-          git diff --name-status --no-renames ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+          echo "=== Files changed in this PR (renames shown as delete+add) ==="
+          git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+          echo ""
+          echo "=== File list with line counts ==="
+          git diff --stat ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
           echo ""
           echo "=== Total files changed: ==="
-          git diff --name-only --no-renames ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l
+          git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
@@ -83,18 +91,35 @@ jobs:
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
           
-          echo "=== Running TruffleHog scan with rename detection disabled ==="
+          echo "=== TruffleHog scanning PR changes (renamed files as delete+add) ==="
+          echo "Base commit: ${{ github.event.pull_request.base.sha }}"
+          echo "Head commit: ${{ github.event.pull_request.head.sha }}"
+          echo ""
+          
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
+            -e GIT_CONFIG_COUNT=2 \
+            -e GIT_CONFIG_KEY_0=diff.renames \
+            -e GIT_CONFIG_VALUE_0=false \
+            -e GIT_CONFIG_KEY_1=diff.renameLimit \
+            -e GIT_CONFIG_VALUE_1=0 \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
             --since-commit ${{ github.event.pull_request.base.sha }} \
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
-            --no-update 2>&1 || true)
+            --no-update --debug 2>&1 || true)
           
-          echo "=== Debug: Files scanned by TruffleHog ==="
-          echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u || echo "No files found in scan output"
+          echo "=== Files scanned by TruffleHog ==="
+          SCANNED_FILES=$(echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u 2>/dev/null || echo "")
+          if [ -n "$SCANNED_FILES" ]; then
+            echo "$SCANNED_FILES"
+          else
+            echo "No files with secrets found. TruffleHog scanned changed files but found no secrets."
+            echo ""
+            echo "=== Changed files that were scanned ==="
+            git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+          fi
           echo ""
           
           if [ -n "$SCAN_OUTPUT" ]; then
@@ -118,8 +143,6 @@ jobs:
                 echo "::warning file=${FILE},line=${LINE_NUM},title=${DETECTOR} [Unverified]::Potential secret: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Review and remove if this is a real credential."
               fi
             done <<< "$SCAN_OUTPUT"
-          else
-            echo "No scan output received from TruffleHog"
           fi
           
           echo "verified_count=${VERIFIED_COUNT}" >> $GITHUB_OUTPUT
