@@ -30,7 +30,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+
+      - name: Debug - Show files changed in PR
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          echo "=== Files changed in this PR (including renames) ==="
+          git diff --name-status --no-renames ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+          echo ""
+          echo "=== Total files changed: ==="
+          git diff --name-only --no-renames ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
@@ -62,7 +72,7 @@ jobs:
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --json ${{ steps.config.outputs.exclude_args }}
+          extra_args: --json --no-update ${{ steps.config.outputs.exclude_args }}
 
       - name: Parse scan results
         id: parse
@@ -73,19 +83,19 @@ jobs:
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
           
-          git config diff.renames false
-          
+          echo "=== Running TruffleHog scan with rename detection disabled ==="
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
-            -e GIT_CONFIG_COUNT=1 \
-            -e GIT_CONFIG_KEY_0=diff.renames \
-            -e GIT_CONFIG_VALUE_0=false \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
             --since-commit ${{ github.event.pull_request.base.sha }} \
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
-            --no-update 2>/dev/null || true)
+            --no-update 2>&1 || true)
+          
+          echo "=== Debug: Files scanned by TruffleHog ==="
+          echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u || echo "No files found in scan output"
+          echo ""
           
           if [ -n "$SCAN_OUTPUT" ]; then
             while IFS= read -r line; do
@@ -98,6 +108,8 @@ jobs:
               DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
               VERIFIED=$(echo "$line" | jq -r '.Verified // false')
               
+              echo "Found secret: ${DETECTOR} in ${FILE}:${LINE_NUM} (Verified: ${VERIFIED})"
+              
               if [ "$VERIFIED" == "true" ]; then
                 VERIFIED_COUNT=$((VERIFIED_COUNT + 1))
                 echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} [VERIFIED]::VERIFIED ACTIVE CREDENTIAL: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. This secret is confirmed active. Remove and rotate immediately!"
@@ -106,6 +118,8 @@ jobs:
                 echo "::warning file=${FILE},line=${LINE_NUM},title=${DETECTOR} [Unverified]::Potential secret: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Review and remove if this is a real credential."
               fi
             done <<< "$SCAN_OUTPUT"
+          else
+            echo "No scan output received from TruffleHog"
           fi
           
           echo "verified_count=${VERIFIED_COUNT}" >> $GITHUB_OUTPUT
