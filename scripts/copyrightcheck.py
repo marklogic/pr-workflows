@@ -19,7 +19,7 @@ class CopyrightValidator:
     """Validates copyright headers in source files."""
     
     # Common patterns for comment block terminators
-    TRAILING_COMMENT_TERMINATORS = r'(\*/|-->)\s*$'
+    TRAILING_COMMENT_TERMINATORS = r'(\*/|-->|:\))\s*$'
     
     def __init__(self, config_file: str):
         """Initialize validator with configuration file."""
@@ -139,8 +139,8 @@ class CopyrightValidator:
         lines = content.split('\n')
         # Look for copyright in first 20 lines
         for line in lines[:20]:
-            # Remove common leading comment characters and whitespace (including HTML <!-- starts)
-            cleaned_line = re.sub(r'^[\s\*#\/]*(?:<!--)?', '', line).strip()
+            # Remove common leading comment characters and whitespace (including HTML <!-- starts and XQuery (: )
+            cleaned_line = re.sub(r'^[\s\*#\/]*(?:<!--|\(:)?', '', line).strip()
             # Trim common trailing block terminators if present on same line
             cleaned_line = re.sub(self.TRAILING_COMMENT_TERMINATORS, '', cleaned_line).strip()
             if cleaned_line.lower().startswith('copyright'):
