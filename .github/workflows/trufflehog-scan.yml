@@ -9,15 +9,6 @@ permissions:
   contents: read
   pull-requests: write
 
-# Default exclusion patterns (regex format)
-# Supports: exact filenames, wildcards, regex patterns
-# Examples:
-#   Exact file:     ^config/settings\.json$
-#   Directory:      ^node_modules/
-#   Extension:      \.lock$
-#   Wildcard:       .*\.min\.js$
-#   Regex:          ^src/test/.*_test\.py$
-
 env:
   DEFAULT_EXCLUDES: |
     ^node_modules/
@@ -39,6 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Configure Git for rename detection
@@ -50,23 +42,19 @@ jobs:
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
           git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
           echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
 
       - name: Setup exclude config
         id: config
         run: |
-          # Always include default exclusions
           echo "Adding default exclusions"
           cat << 'EOF' > .trufflehog-ignore
           ${{ env.DEFAULT_EXCLUDES }}
           EOF
           
-          # Append repo/org-level custom exclusions if defined
           if [ -n "${{ vars.TRUFFLEHOG_EXCLUDES }}" ]; then
             echo "Adding repo/org-level TRUFFLEHOG_EXCLUDES patterns"
-            # Support both comma-separated and newline-separated patterns
             echo "${{ vars.TRUFFLEHOG_EXCLUDES }}" | tr ',' '\n' | sed '/^$/d' >> .trufflehog-ignore
           fi
           
@@ -87,8 +75,9 @@ jobs:
         id: parse
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Capture TruffleHog JSON output by re-running with same args
-          echo "Parsing TruffleHog results..."
+          echo "========================================"
+          echo "SCANNING PR CHANGES"
+          echo "========================================"
           
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
@@ -105,12 +94,22 @@ jobs:
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
-            --no-update 2>/dev/null || true)
+            --no-update 2>&1 || true)
           
-          # Parse JSON lines and create GitHub annotations
+          echo "========================================"
+          echo "FILES SCANNED BY TRUFFLEHOG"
+          echo "========================================"
+          SCANNED_FILES=$(echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u 2>/dev/null || echo "")
+          if [ -n "$SCANNED_FILES" ]; then
+            echo "$SCANNED_FILES"
+          else
+            echo "No secrets found. Files that were scanned:"
+            git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+          fi
+          echo "========================================"
+          
           if [ -n "$SCAN_OUTPUT" ]; then
             while IFS= read -r line; do
-              # Skip non-JSON lines (info logs)
               if ! echo "$line" | jq -e '.DetectorName' > /dev/null 2>&1; then
                 continue
               fi
@@ -120,21 +119,23 @@ jobs:
               DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
               VERIFIED=$(echo "$line" | jq -r '.Verified // false')
               
+              echo "Found: ${DETECTOR} in ${FILE}:${LINE_NUM} (Verified: ${VERIFIED})"
+              
               if [ "$VERIFIED" == "true" ]; then
                 VERIFIED_COUNT=$((VERIFIED_COUNT + 1))
-                # Error annotation for verified secrets
                 echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} [VERIFIED]::VERIFIED ACTIVE CREDENTIAL: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. This secret is confirmed active. Remove and rotate immediately!"
               else
                 UNVERIFIED_COUNT=$((UNVERIFIED_COUNT + 1))
-                # Warning annotation for unverified secrets
                 echo "::warning file=${FILE},line=${LINE_NUM},title=${DETECTOR} [Unverified]::Potential secret: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Review and remove if this is a real credential."
               fi
             done <<< "$SCAN_OUTPUT"
           fi
           
+          echo ""
+          echo "Verified: ${VERIFIED_COUNT}, Unverified: ${UNVERIFIED_COUNT}"
+          
           echo "verified_count=${VERIFIED_COUNT}" >> $GITHUB_OUTPUT
           echo "unverified_count=${UNVERIFIED_COUNT}" >> $GITHUB_OUTPUT
-          echo "Scan complete: ${VERIFIED_COUNT} verified, ${UNVERIFIED_COUNT} unverified secrets found"
 
       - name: Process scan results
         id: process
@@ -144,17 +145,14 @@ jobs:
           UNVERIFIED=${{ steps.parse.outputs.unverified_count || 0 }}
           
           if [ "$VERIFIED" -gt 0 ]; then
-            # Verified secrets found - must fail
             echo "has_verified=true" >> $GITHUB_OUTPUT
             echo "has_secrets=true" >> $GITHUB_OUTPUT
             echo "description=Found ${VERIFIED} verified (active) secrets - action required" >> $GITHUB_OUTPUT
           elif [ "$UNVERIFIED" -gt 0 ]; then
-            # Only unverified secrets - warn but pass
             echo "has_verified=false" >> $GITHUB_OUTPUT
             echo "has_secrets=true" >> $GITHUB_OUTPUT
             echo "description=Found ${UNVERIFIED} unverified potential secrets - review recommended" >> $GITHUB_OUTPUT
           else
-            # No secrets
             echo "has_verified=false" >> $GITHUB_OUTPUT
             echo "has_secrets=false" >> $GITHUB_OUTPUT
             echo "description=No secrets detected in PR changes" >> $GITHUB_OUTPUT
@@ -173,7 +171,6 @@ jobs:
             const verifiedCount = '${{ steps.parse.outputs.verified_count }}' || '0';
             const unverifiedCount = '${{ steps.parse.outputs.unverified_count }}' || '0';
             
-            // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -185,18 +182,12 @@ jobs:
             
             let body;
             if (!hasSecrets) {
-              // No secrets found
               if (existing) {
-                // Update existing comment to show secrets are now resolved
                 body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
-
             **No secrets detected in this pull request.**
-
             **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
-
             Previous issues have been resolved. Thank you for addressing the security concerns!
-
             ---
             *This comment will be updated if new secrets are detected in future commits.*
             `;
@@ -207,11 +198,9 @@ jobs:
                   body: body
                 });
               }
-              // If no existing comment and no secrets, don't post anything
               return;
             }
             
-            // Secrets found - create or update warning comment
             let severity, icon, action;
             if (hasVerified) {
               severity = 'CRITICAL';
@@ -225,29 +214,22 @@ jobs:
             
             body = `${commentMarker}
             ## ${icon} Secret Scanning ${severity}
-
             **TruffleHog scan results:**
             - **Verified (active) secrets:** ${verifiedCount} ${verifiedCount > 0 ? ':x:' : ':white_check_mark:'}
             - **Unverified (potential) secrets:** ${unverifiedCount} ${unverifiedCount > 0 ? ':warning:' : ':white_check_mark:'}
-
             **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
-
             ${action}
-
             ### What to do:
             1. **Review the workflow annotations** - they point to exact file and line locations
             2. **Remove any exposed secrets** from your code
             3. **Rotate compromised credentials** - especially verified ones
             4. **Push the fix** to this branch
-
             ### Understanding Results
             | Type | Meaning | Action Required |
             |------|---------|-----------------|
             | **Verified** | Confirmed active credential | **Must remove & rotate** - PR blocked |
             | **Unverified** | Potential secret pattern | Review recommended - PR can proceed |
-
             Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
             ---
             *Verified secrets are confirmed active by TruffleHog. Unverified secrets match known patterns but couldn't be validated.*
             `;
