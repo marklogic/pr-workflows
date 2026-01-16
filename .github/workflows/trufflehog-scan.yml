@@ -75,9 +75,7 @@ jobs:
         id: parse
         if: github.event_name != 'workflow_dispatch'
         run: |
-          echo "========================================"
-          echo "SCANNING PR CHANGES"
-          echo "========================================"
+          echo "Parsing TruffleHog results..."
           
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
@@ -94,19 +92,7 @@ jobs:
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
-            --no-update 2>&1 || true)
-          
-          echo "========================================"
-          echo "FILES SCANNED BY TRUFFLEHOG"
-          echo "========================================"
-          SCANNED_FILES=$(echo "$SCAN_OUTPUT" | jq -r 'select(.SourceMetadata.Data.Git.file) | .SourceMetadata.Data.Git.file' | sort -u 2>/dev/null || echo "")
-          if [ -n "$SCANNED_FILES" ]; then
-            echo "$SCANNED_FILES"
-          else
-            echo "No secrets found. Files that were scanned:"
-            git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
-          fi
-          echo "========================================"
+            --no-update 2>/dev/null || true)
           
           if [ -n "$SCAN_OUTPUT" ]; then
             while IFS= read -r line; do
@@ -125,8 +111,6 @@ jobs:
               DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
               VERIFIED=$(echo "$line" | jq -r '.Verified // false')
               
-              echo "Found: ${DETECTOR} in ${FILE}:${LINE_NUM} (Verified: ${VERIFIED})"
-              
               if [ "$VERIFIED" == "true" ]; then
                 VERIFIED_COUNT=$((VERIFIED_COUNT + 1))
                 echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} [VERIFIED]::VERIFIED ACTIVE CREDENTIAL: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. This secret is confirmed active. Remove and rotate immediately!"
@@ -137,11 +121,9 @@ jobs:
             done <<< "$SCAN_OUTPUT"
           fi
           
-          echo ""
-          echo "Verified: ${VERIFIED_COUNT}, Unverified: ${UNVERIFIED_COUNT}"
-          
           echo "verified_count=${VERIFIED_COUNT}" >> $GITHUB_OUTPUT
           echo "unverified_count=${UNVERIFIED_COUNT}" >> $GITHUB_OUTPUT
+          echo "Scan complete: ${VERIFIED_COUNT} verified, ${UNVERIFIED_COUNT} unverified secrets found"
 
       - name: Process scan results
         id: process
