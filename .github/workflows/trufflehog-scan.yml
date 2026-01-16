@@ -39,17 +39,6 @@ jobs:
           git config --global diff.renameLimit 0
           echo "Git configured to treat renames as delete+add"
 
-      - name: Debug - Show files changed in PR
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          echo "========================================"
-          echo "FILES CHANGED (BASE vs HEAD)"
-          echo "========================================"
-          git diff --name-status ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
-          echo ""
-          echo "Total: $(git diff --name-only ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | wc -l) files"
-          echo "========================================"
-
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
         run: |
