@@ -115,6 +115,12 @@ jobs:
               fi
               
               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.file // "unknown"')
+              
+              # Skip if file doesn't exist in current state (deleted/renamed)
+              if [ ! -f "$FILE" ]; then
+                continue
+              fi
+              
               LINE_NUM=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.line // 1')
               DETECTOR=$(echo "$line" | jq -r '.DetectorName // "Secret"')
               VERIFIED=$(echo "$line" | jq -r '.Verified // false')
