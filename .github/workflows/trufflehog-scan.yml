@@ -80,6 +80,12 @@ jobs:
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
           
+          # Get changed files list
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Scan only HEAD commit (current state), not history
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
             -e GIT_CONFIG_COUNT=2 \
             -e GIT_CONFIG_KEY_0=diff.renames \
@@ -88,8 +94,8 @@ jobs:
             -e GIT_CONFIG_VALUE_1=0 \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
-            --since-commit ${{ github.event.pull_request.base.sha }} \
             --branch ${{ github.event.pull_request.head.sha }} \
+            --max-depth=1 \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
             --no-update 2>/dev/null || true)
@@ -102,8 +108,8 @@ jobs:
               
               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Git.file // "unknown"')
               
-              # Skip if file doesn't exist in current state (deleted/renamed)
-              if [ ! -f "$FILE" ]; then
+              # Only report if file is in the changed files list
+              if ! echo "$CHANGED_FILES" | grep -qxF "$FILE"; then
                 continue
               fi
               
@@ -113,7 +119,7 @@ jobs:
               
               if [ "$VERIFIED" == "true" ]; then
                 VERIFIED_COUNT=$((VERIFIED_COUNT + 1))
-                echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} [VERIFIED]::VERIFIED ACTIVE CREDENTIAL: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. This secret is confirmed active. Remove and rotate immediately!"
+                echo "::error file=${FILE},line=${LINE_NUM},title=${DETECTOR} [VERIFIED]::VERIFIED ACTIVE CREDENTIAL: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Remove and rotate immediately!"
               else
                 UNVERIFIED_COUNT=$((UNVERIFIED_COUNT + 1))
                 echo "::warning file=${FILE},line=${LINE_NUM},title=${DETECTOR} [Unverified]::Potential secret: ${DETECTOR} found in ${FILE} at line ${LINE_NUM}. Review and remove if this is a real credential."
