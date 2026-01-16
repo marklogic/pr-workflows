@@ -41,6 +41,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure Git for rename detection
+        run: |
+          git config --global diff.renames false
+          git config --global diff.renameLimit 0
+          echo "Git configured to treat renames as delete+add"
+
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -88,6 +94,11 @@ jobs:
           UNVERIFIED_COUNT=0
           
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
+            -e GIT_CONFIG_COUNT=2 \
+            -e GIT_CONFIG_KEY_0=diff.renames \
+            -e GIT_CONFIG_VALUE_0=false \
+            -e GIT_CONFIG_KEY_1=diff.renameLimit \
+            -e GIT_CONFIG_VALUE_1=0 \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
             --since-commit ${{ github.event.pull_request.base.sha }} \
