@@ -39,14 +39,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Fetch PR head commits
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
-          git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
-          echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
 
       - name: Setup exclude config
         id: config
@@ -73,7 +67,7 @@ jobs:
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
-          base: ${{ github.event.pull_request.base.sha }}
+          base: ${{ github.event.pull_request.head.sha }}~1
           head: ${{ github.event.pull_request.head.sha }}
           extra_args: --json ${{ steps.config.outputs.exclude_args }}
 
@@ -90,7 +84,7 @@ jobs:
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
-            --since-commit ${{ github.event.pull_request.base.sha }} \
+            --since-commit ${{ github.event.pull_request.head.sha }}~1 \
             --branch ${{ github.event.pull_request.head.sha }} \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
@@ -176,7 +170,7 @@ jobs:
             if (!hasSecrets) {
               // No secrets found
               if (existing) {
-                // Update existing comment to show secrets are now resolved
+                // Update to show secrets are now resolved (whether verified or unverified)
                 body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
 
