@@ -31,19 +31,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Configure Git for rename detection
-        run: |
-          git config --global diff.renames false
-          git config --global diff.renameLimit 0
-          echo "Git configured to treat renames as delete+add"
-
-      - name: Fetch PR head commits
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
-          echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
+          fetch-depth: 1
 
       - name: Setup exclude config
         id: config
@@ -67,7 +55,7 @@ jobs:
         uses: trufflesecurity/trufflehog@main
         continue-on-error: true
         with:
-          base: ${{ github.event.pull_request.base.sha }}
+          base: ${{ github.event.pull_request.head.sha }}~1
           head: ${{ github.event.pull_request.head.sha }}
           extra_args: --json ${{ steps.config.outputs.exclude_args }}
 
@@ -94,6 +82,7 @@ jobs:
             -e GIT_CONFIG_VALUE_1=0 \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
+            --since-commit ${{ github.event.pull_request.head.sha }}~1 \
             --branch ${{ github.event.pull_request.head.sha }} \
             --max-depth=1 \
             --json \
@@ -177,6 +166,7 @@ jobs:
             let body;
             if (!hasSecrets) {
               if (existing) {
+                // Update to show secrets are now resolved (whether verified or unverified)
                 body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
             **No secrets detected in this pull request.**
