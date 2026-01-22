@@ -316,14 +316,10 @@ class CopyrightValidator:
             clone_res = subprocess.run(['git','clone','--shallow-since','1 month ago','--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
             if clone_res.returncode != 0:
                 raise Exception(f"Git clone failed: {clone_res.stderr}")
-            # First try apply with whitespace fix, then 3way for modifications  
-            normal_apply_res = subprocess.run(['git','apply','--whitespace=fix', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
-            if normal_apply_res.returncode != 0:
-                logger.info(f"Git apply failed, trying --3way: {normal_apply_res.stderr[:200]}")
-                threeway_apply_res = subprocess.run(['git','apply','--3way','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
-                apply_res = threeway_apply_res
-            else:
-                apply_res = normal_apply_res
+            # Apply diff with 3-way merge and whitespace fix
+            apply_res = subprocess.run(['git','apply','--3way','--whitespace=fix', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            if apply_res.returncode != 0:
+                logger.warning(f"Git apply failed: {apply_res.stderr[:500]}")
             stderr_lower = apply_res.stderr.lower()
             applied_some = stderr_lower.count('applied patch') + stderr_lower.count('cleanly')
             self.diff_applied = apply_res.returncode == 0 or applied_some > 0
