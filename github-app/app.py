@@ -317,10 +317,13 @@ class CopyrightValidator:
             if clone_res.returncode != 0:
                 raise Exception(f"Git clone failed: {clone_res.stderr}")
             # First try normal apply for new files, then 3way for modifications
-            apply_res = subprocess.run(['git','apply','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
-            if apply_res.returncode != 0:
-                logger.info(f"Normal git apply failed, trying --3way: {apply_res.stderr[:200]}")
-                apply_res = subprocess.run(['git','apply','--3way','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            normal_apply_res = subprocess.run(['git','apply','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            if normal_apply_res.returncode != 0:
+                logger.info(f"Normal git apply failed, trying --3way: {normal_apply_res.stderr[:200]}")
+                threeway_apply_res = subprocess.run(['git','apply','--3way','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+                apply_res = threeway_apply_res
+            else:
+                apply_res = normal_apply_res
             stderr_lower = apply_res.stderr.lower()
             applied_some = stderr_lower.count('applied patch') + stderr_lower.count('cleanly')
             self.diff_applied = apply_res.returncode == 0 or applied_some > 0
