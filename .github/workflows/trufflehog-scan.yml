@@ -176,10 +176,13 @@ jobs:
             if (!hasSecrets) {
               // No secrets found
               if (existing) {
-                // Check if existing comment was a critical/blocking one (had verified secrets)
-                const wasBlocking = existing.body.includes('CRITICAL') || existing.body.includes(':rotating_light:');
-                if (wasBlocking) {
-                  // Update to show verified secrets are now resolved
+                // Check if existing comment had any critical/blocking ones/warnings (verified or unverified)
+                const hadVerified = existing.body.includes('CRITICAL') || existing.body.includes(':rotating_light:');
+                const hadUnverified = existing.body.includes('Warning') || existing.body.includes('Unverified');
+                
+                if (hadVerified || hadUnverified) {
+                  // Update to show all secrets are now resolved
+                  const previousType = hadVerified ? 'verified secrets' : 'potential secrets';
                   body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
 
@@ -187,7 +190,7 @@ jobs:
 
             **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
 
-            Previous issues have been resolved. Thank you for addressing the security concerns!
+            Previous ${previousType} have been resolved. Thank you for addressing the security concerns!
 
             ---
             *This comment will be updated if new secrets are detected in future commits.*
@@ -199,7 +202,6 @@ jobs:
                     body: body
                   });
                 }
-                // If it was just a warning (unverified only), leave it as-is
               }
               // If no existing comment and no secrets, don't post anything
               return;
