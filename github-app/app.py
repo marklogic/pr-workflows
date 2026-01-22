@@ -313,7 +313,7 @@ class CopyrightValidator:
             base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
             token = self.headers['Authorization'].replace('token ','')
             auth_clone_url = f"https://x-access-token:{token}@{GHES_URL.replace('https://','')}/{self.repo_full_name}.git"
-            clone_res = subprocess.run(['git','clone','--depth','1','--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
+            clone_res = subprocess.run(['git','clone','--shallow-since','1 month ago','--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
             if clone_res.returncode != 0:
                 raise Exception(f"Git clone failed: {clone_res.stderr}")
             # First try apply with whitespace fix, then 3way for modifications  
