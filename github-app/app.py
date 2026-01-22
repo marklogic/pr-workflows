@@ -282,10 +282,18 @@ class CopyrightValidator:
                 raise Exception(f"Failed to get PR files: {resp.status_code}")
             changed = []
             for fd in resp.json():
-                if fd['status'] in ['added','modified']:
-                    fn = fd['filename']
+                status = fd['status']
+                fn = fd['filename']
+                # Skip deleted/removed files - they don't exist in PR head
+                if status in ['removed', 'deleted']:
+                    logger.info(f"Skipping deleted file: {fn}")
+                    continue
+                # For added, modified, or renamed files, use the new filename
+                if status in ['added', 'modified', 'renamed']:
                     if not fn.startswith('.') or fn == '.copyrightconfig':
                         changed.append(fn)
+                else:
+                    logger.warning(f"Unknown file status '{status}' for {fn}")
             logger.info(f"Changed files: {len(changed)}")
             return changed
         except Exception as e:
@@ -308,10 +316,16 @@ class CopyrightValidator:
             clone_res = subprocess.run(['git','clone','--depth','1','--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
             if clone_res.returncode != 0:
                 raise Exception(f"Git clone failed: {clone_res.stderr}")
-            apply_res = subprocess.run(['git','apply','--3way','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            # First try normal apply for new files, then 3way for modifications
+            apply_res = subprocess.run(['git','apply','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
+            if apply_res.returncode != 0:
+                logger.info(f"Normal git apply failed, trying --3way: {apply_res.stderr[:200]}")
+                apply_res = subprocess.run(['git','apply','--3way','--ignore-whitespace', diff_path], cwd=base_clone_dir, capture_output=True, text=True, timeout=30)
             stderr_lower = apply_res.stderr.lower()
             applied_some = stderr_lower.count('applied patch') + stderr_lower.count('cleanly')
             self.diff_applied = apply_res.returncode == 0 or applied_some > 0
+            if apply_res.returncode != 0:
+                logger.warning(f"Git apply stderr: {apply_res.stderr[:500]}")
             downloaded = []
             diff_content = diff_resp.text
             for fp in file_paths:
@@ -325,7 +339,7 @@ class CopyrightValidator:
                     else:
                         self.files_from_base.append(fp)
                 else:
-                    logger.warning(f"File not found: {fp}")
+                    logger.warning(f"File not found after diff apply: {fp}")
             return downloaded
         except Exception as e:
             logger.error(f"download_files error: {e}")
