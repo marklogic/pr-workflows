@@ -313,7 +313,10 @@ class CopyrightValidator:
             base_clone_dir = os.path.join(self.temp_dir, 'base_repo')
             token = self.headers['Authorization'].replace('token ','')
             auth_clone_url = f"https://x-access-token:{token}@{GHES_URL.replace('https://','')}/{self.repo_full_name}.git"
-            clone_res = subprocess.run(['git','clone','--shallow-since','1 month ago','--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
+            # Calculate date 30 days ago for consistent shallow clone across environments
+            from datetime import datetime, timedelta
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            clone_res = subprocess.run(['git','clone','--shallow-since', thirty_days_ago,'--branch', self.pr_data['base']['ref'], auth_clone_url, base_clone_dir], capture_output=True, text=True, timeout=60)
             if clone_res.returncode != 0:
                 raise Exception(f"Git clone failed: {clone_res.stderr}")
             # Apply diff with 3-way merge and whitespace fix
