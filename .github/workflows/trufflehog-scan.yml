@@ -176,13 +176,15 @@ jobs:
             if (!hasSecrets) {
               // No secrets found
               if (existing) {
-                // Check if existing comment had any critical/blocking ones/warnings (verified or unverified)
-                const hadVerified = existing.body.includes('CRITICAL') || existing.body.includes(':rotating_light:');
-                const hadUnverified = existing.body.includes('Warning') || existing.body.includes('Unverified');
+                // Check if existing comment already shows "Passed" state
+                const alreadyPassed = existing.body.includes(':white_check_mark: Secret Scanning Passed');
                 
-                if (hadVerified || hadUnverified) {
+                if (!alreadyPassed) {
                   // Update to show all secrets are now resolved
+                  // Determine what type of secrets were previously found
+                  const hadVerified = existing.body.includes('CRITICAL') || existing.body.includes(':rotating_light:');
                   const previousType = hadVerified ? 'verified secrets' : 'potential secrets';
+                  
                   body = `${commentMarker}
             ## :white_check_mark: Secret Scanning Passed
 
