@@ -91,8 +91,10 @@ jobs:
           # Checkout PR head to scan current file state
           git checkout ${{ github.event.pull_request.head.sha }} --quiet
           
-          # Get list of files changed in this PR
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep -v '^$' || true)
+          # Get list of files changed in this PR (with rename detection)
+          # -M enables rename detection, showing only the new filename for renamed files
+          # --diff-filter=d excludes deleted files (we only want files that exist in the PR head)
+          CHANGED_FILES=$(git diff --name-only -M --diff-filter=d ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep -v '^$' || true)
           
           if [ -z "$CHANGED_FILES" ]; then
             echo "No files changed in PR"
