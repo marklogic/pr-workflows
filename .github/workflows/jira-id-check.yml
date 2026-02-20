@@ -43,6 +43,8 @@ jobs:
     steps:
       - name: 🏷️ Validate JIRA ticket ID in PR title
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Get PR title from context or input parameter (for pull_request_target support)
           if [[ -n "${{ inputs.pr-title }}" ]]; then
@@ -51,6 +53,25 @@ jobs:
           else
             PR_TITLE="${{ github.event.pull_request.title }}"
             echo "Using PR title from GitHub event context"
+          fi
+          
+          # Fetch the current PR title from the API to handle re-runs correctly.
+          # When a workflow is re-run (either directly or via a reusable workflow caller),
+          # the event payload contains the title from the original trigger, not the current
+          # state. If the user edited the title (e.g., to add a JIRA ID), we need to detect
+          # that and use the updated title instead.
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [[ -n "$PR_NUMBER" ]]; then
+            LIVE_TITLE=$(gh pr view "$PR_NUMBER" \
+              --repo "${{ github.repository }}" \
+              --json title --jq '.title' 2>/dev/null || true)
+            
+            if [[ -n "$LIVE_TITLE" && "$LIVE_TITLE" != "$PR_TITLE" ]]; then
+              echo "⚠️  PR title was updated since workflow was triggered"
+              echo "   Event title: $PR_TITLE"
+              echo "   Current title: $LIVE_TITLE"
+              PR_TITLE="$LIVE_TITLE"
+            fi
           fi
           echo "PR Title: $PR_TITLE"
           
