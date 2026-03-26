@@ -48,12 +48,12 @@ class CopyrightValidator:
           Mixed (inline value + continuation lines):
             filesexcluded: README.MD
             .github/*
-            src/scripts/brijeshtest.py
+            src/scripts/example.py
         
           Multiline only (empty inline value):
             filesexcluded:
             .github/*
-            src/scripts/brijeshtest.py
+            src/scripts/example.py
         
         Continuation lines are collected until an empty line or a new key: is found.
         """
