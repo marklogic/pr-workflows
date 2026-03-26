@@ -54,33 +54,49 @@ class CopyrightValidator:
                 # Reset file pointer to beginning
                 f.seek(0)
                 
+                current_multiline_key = None
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     
-                    # Skip empty lines and comments
-                    if not line or line.startswith('#'):
+                    # Empty line ends any active multi-line block
+                    if not line:
+                        current_multiline_key = None
                         continue
                     
-                    # Parse key:value pairs
+                    # Skip comments
+                    if line.startswith('#'):
+                        continue
+                    
+                    # Detect key:value pairs — key must be a simple word (no path chars)
                     if ':' in line:
-                        key, value = line.split(':', 1)
-                        key = key.strip().lower()
-                        value = value.strip()
-                        
-                        if key == 'startyear':
-                            try:
-                                config['startyear'] = int(value)
-                            except ValueError:
-                                print(f"Error: Invalid start year '{value}'. Must be a valid integer.")
-                                sys.exit(1)
-                        
-                        elif key == 'filesexcluded':
-                            # Parse comma-separated list or single file
-                            if value:
-                                files = [f.strip() for f in value.split(',')]
-                                config['filesexcluded'] = [f for f in files if f]
-                            else:
-                                config['filesexcluded'] = []
+                        key_part, value_part = line.split(':', 1)
+                        key_candidate = key_part.strip().lower()
+                        if re.match(r'^[a-z][a-z0-9]*$', key_candidate):
+                            current_multiline_key = None
+                            key = key_candidate
+                            value = value_part.strip()
+                            
+                            if key == 'startyear':
+                                try:
+                                    config['startyear'] = int(value)
+                                except ValueError:
+                                    print(f"Error: Invalid start year '{value}'. Must be a valid integer.")
+                                    sys.exit(1)
+                            
+                            elif key == 'filesexcluded':
+                                if value:
+                                    # Single-line: comma-separated or single entry
+                                    files = [f.strip() for f in value.split(',')]
+                                    config['filesexcluded'] = [f for f in files if f]
+                                else:
+                                    # Multi-line: collect subsequent lines as entries
+                                    config['filesexcluded'] = []
+                                    current_multiline_key = 'filesexcluded'
+                            continue
+                    
+                    # Continuation line for an active multi-line key
+                    if current_multiline_key == 'filesexcluded':
+                        config['filesexcluded'].append(line)
                 
                 print("✅ Parsed configuration:")
                 for key, value in config.items():
