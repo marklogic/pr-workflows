@@ -58,8 +58,9 @@ class CopyrightValidator:
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
                     
-                    # Empty line: skip but keep any active multi-line block
+                    # Empty line ends any active multi-line block
                     if not line:
+                        current_multiline_key = None
                         continue
                     
                     # Skip comments
