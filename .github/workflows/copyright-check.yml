@@ -87,6 +87,8 @@ jobs:
       id: pr-comment
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       uses: actions/github-script@v7
+      env:
+        VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
       with:
         script: |
           const fs = require('fs');
@@ -96,15 +98,20 @@ jobs:
             try { mdRaw = fs.readFileSync('summary.md','utf8'); } catch(e){ core.warning('summary.md not found'); core.setOutput('comment_action','unavailable'); return; }
             if (!mdRaw.endsWith('\n')) mdRaw += '\n';
             if (!mdRaw.includes('<!-- COPYRIGHT-CHECK-COMMENT:')) mdRaw += '<!-- COPYRIGHT-CHECK-COMMENT: v1 -->\n';
+            const isValid = process.env.VALIDATION_STATUS === 'success';
             const number = context.payload.pull_request.number;
             const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, per_page: 100 });
             const existing = comments.find(c => (c.body||'').includes('<!-- COPYRIGHT-CHECK-COMMENT:'));
             if (existing) {
+              // Updating an existing comment does not send an email notification.
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body: mdRaw });
               core.setOutput('comment_action','updated');
-            } else {
+            } else if (!isValid) {
               await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: number, body: mdRaw });
               core.setOutput('comment_action','created');
+            } else {
+              core.info('Copyright headers are valid and no prior comment exists; skipping comment to avoid email notification.');
+              core.setOutput('comment_action','skipped');
             }
           } catch(e) {
             core.error(`Failed to create/update PR comment: ${e.status || ''} ${e.message}`);
