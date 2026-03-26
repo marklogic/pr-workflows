@@ -141,7 +141,7 @@ class CopyrightValidator:
         
         # Always exclude dotfiles (files starting with .)
         filename = os.path.basename(relative_path)
-        if filename.startswith('.'):        
+        if filename.startswith('.'):  
             print(f"🚫 Excluding dotfile: {relative_path}")
             return True
         
@@ -162,7 +162,7 @@ class CopyrightValidator:
         
         print(f"✅ Including: {relative_path}")
         return False
-            
+                
     
     def _get_expected_copyright(self) -> str:
         """Generate expected copyright header."""
@@ -282,9 +282,205 @@ class CopyrightValidator:
                     'error': None,
                     'found_copyright': None
                 })
-            else:
-                result = self.validate_file(file_path)
-                result['relative_path'] = relative_path
-                results.append(result)
+                continue
+            
+            # Use absolute path for file operations
+            result = self.validate_file(file_path)
+            result['relative_path'] = relative_path
+            results.append(result)
         
         return results
+    
+    def print_results(self, results: List[Dict[str, Any]], verbose: bool = False):
+        """Print validation results."""
+        MARKER_START = "<<<COPYRIGHT-CHECK:MARKDOWN>>>"
+        MARKER_END = "<<<END COPYRIGHT-CHECK:MARKDOWN>>>"
+        total_files = len(results)
+        valid_files = sum(1 for r in results if r['valid'] and not r['excluded'])
+        excluded_files = sum(1 for r in results if r['excluded'])
+        invalid_files = sum(1 for r in results if not r['valid'] and not r['excluded'])
+
+        LIST_LIMIT = 200  # safety cap
+
+        print(MARKER_START)
+        ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+        commit_sha = os.environ.get('COPYRIGHT_CHECK_COMMIT_SHA')
+        print("**Copyright Validation Results**")
+        counts_line = f"Total: {total_files} | Passed: {valid_files} | Failed: {invalid_files} | Skipped: {excluded_files}"
+        if commit_sha:
+            counts_line += f"  <small>| at: {ts} | commit: {commit_sha[:12]}</small>"
+        else:
+            counts_line += f"  <small>| at: {ts}</small>"
+        print(counts_line)
+        print()  
+
+        has_invalid = invalid_files > 0
+        if has_invalid:
+            print("### ❌ Failed Files")
+            for result in results:
+                if result['valid'] or result['excluded']:
+                    continue
+                # Prefer relative path for display
+                display_path = result.get('relative_path') or result['file']
+                print(f"- {display_path}")
+                print()  # blank line for visual spacing before error details
+                err_msg = result.get('error') or 'Invalid header'
+                # Error label small + bold
+                print("  <small><strong>Error:</strong></small>")
+                print("  ```diff")
+                print(f"  - {err_msg}")
+                print("  ```")
+                expected_line = result['expected_copyright']
+                # Expected header label small + bold
+                print("  <small><strong>Expected header:</strong></small>")
+                print("  ```")
+                print(f"  {expected_line}")
+                print("  ```")
+            print()
+
+        excluded_list = [r for r in results if r['excluded']]
+        if excluded_list:
+            print("### ⏭️ Skipped (Excluded) Files")
+            for r in excluded_list[:LIST_LIMIT]:
+                display_path = r.get('relative_path') or r['file']
+                print(f"- {display_path}")
+            if len(excluded_list) > LIST_LIMIT:
+                print(f"- … ({len(excluded_list) - LIST_LIMIT} more omitted)")
+            print()
+
+        valid_list = [r for r in results if r['valid'] and not r['excluded']]
+        if valid_list:
+            print("### ✅ Valid Files")
+            for r in valid_list[:LIST_LIMIT]:
+                display_path = r.get('relative_path') or r['file']
+                print(f"- {display_path}")
+            if len(valid_list) > LIST_LIMIT:
+                print(f"- … ({len(valid_list) - LIST_LIMIT} more omitted)")
+            print()
+
+        # Moved Guidance section here (after all file lists, before success/timestamp)
+        if has_invalid:
+            print("### 🛠️ Guidance")
+            print("Follow these steps to fix the failed files:")
+            print("1. Insert the expected header at the very top (within first 20 lines) of each failed file.")
+            print("2. Ensure the year range matches the configuration (start year through current year).")
+            print("3. Do not alter spacing or punctuation in the header line.")
+            print("4. Commit and push the changes to update this check.")
+            print()  
+
+        if not has_invalid:
+            print("✅ All files have valid copyright headers!\n")
+
+        print(MARKER_END)
+
+
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(
+        description="Validate copyright headers in source files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python copyrightcheck.py -c config.yml file1.py file2.js
+  python copyrightcheck.py -c config.yml --files-from-stdin
+  echo "file1.py\nfile2.js" | python copyrightcheck.py -c config.yml --files-from-stdin
+        """
+    )
+    
+    parser.add_argument(
+        '-c', '--config',
+        required=True,
+        help='Path to copyright configuration file'
+    )
+    
+    parser.add_argument(
+        '-w', '--working-dir',
+        help='Working directory for resolving relative file paths (default: current directory)'
+    )
+    
+    parser.add_argument(
+        'files',
+        nargs='*',
+        help='Files to check for copyright headers (relative to working-dir if specified)'
+    )
+    
+    parser.add_argument(
+        '--files-from-stdin',
+        action='store_true',
+        help='Read file paths from standard input (one per line)'
+    )
+    
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Show detailed output including valid and excluded files'
+    )
+    
+    parser.add_argument(
+        '--origins-file',
+        help='Optional file containing origin metadata for each file (ignored by validator)',
+        required=False
+    )
+    
+    args = parser.parse_args()
+    
+    # Get file paths
+    file_paths = []
+    
+    if args.files_from_stdin:
+        # Read file paths from stdin
+        for line in sys.stdin:
+            file_path = line.strip()
+            if file_path:
+                file_paths.append(file_path)
+    else:
+        file_paths = args.files
+    
+    if not file_paths:
+        print("Error: No files specified. Use positional arguments or --files-from-stdin.")
+        sys.exit(1)
+    
+    # Initialize validator
+    validator = CopyrightValidator(args.config)
+    
+    # Set working directory if specified
+    working_dir = args.working_dir or os.getcwd()
+    if args.working_dir:
+        print(f"📂 Working directory: {working_dir}")
+    
+    # Convert file paths to absolute paths for file operations
+    # but keep relative paths for exclusion checking
+    absolute_file_paths = []
+    relative_file_paths = []
+    
+    for file_path in file_paths:
+        if os.path.isabs(file_path):
+            # Already absolute - convert to relative for exclusion checking
+            try:
+                relative_path = os.path.relpath(file_path, working_dir)
+                absolute_file_paths.append(file_path)
+                relative_file_paths.append(relative_path)
+            except ValueError:
+                # If relpath fails, use as-is
+                absolute_file_paths.append(file_path)
+                relative_file_paths.append(file_path)
+        else:
+            # Relative path - resolve to absolute for file operations
+            absolute_path = os.path.join(working_dir, file_path)
+            absolute_file_paths.append(absolute_path)
+            relative_file_paths.append(file_path)
+    
+    # Validate files using absolute paths for file ops, relative for exclusion
+    results = validator.validate_files(absolute_file_paths, relative_file_paths)
+    
+    # Print results
+    validator.print_results(results, verbose=args.verbose)
+    
+    # Exit with error code if any files are invalid
+    invalid_count = sum(1 for r in results if not r['valid'] and not r['excluded'])
+    if invalid_count > 0:
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
