@@ -312,7 +312,7 @@ class CopyrightValidator:
         else:
             counts_line += f"  <small>| at: {ts}</small>"
         print(counts_line)
-        print()  
+        print()
 
         has_invalid = invalid_files > 0
         if has_invalid:
