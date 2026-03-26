@@ -95,8 +95,10 @@ class CopyrightValidator:
                             continue
                     
                     # Continuation line for an active multi-line key
+                    # Each line may contain one or more comma-separated entries
                     if current_multiline_key == 'filesexcluded':
-                        config['filesexcluded'].append(line)
+                        entries = [e.strip() for e in line.split(',')]
+                        config['filesexcluded'].extend([e for e in entries if e])
                 
                 print("✅ Parsed configuration:")
                 for key, value in config.items():
