@@ -18,14 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
       issues: write
 
     steps:
     - name: Checkout PR head
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: refs/pull/${{ github.event.pull_request.number }}/head
         path: target-repo
         persist-credentials: false
 
@@ -87,8 +86,8 @@ jobs:
         cfg="$CONFIG_FILE"
         [ -f "$script" ] || { echo "script missing"; exit 1; }
         chmod +x "$script"
-        files=$(tr '\n' ' ' < files_to_check.txt)
-        python3 "$script" --config "$cfg" --working-dir target-repo $files > validation_output.txt 2>&1
+        python3 "$script" --config "$cfg" --working-dir target-repo \
+          --files-from-stdin < files_to_check.txt > validation_output.txt 2>&1
         ec=$?
         if [ $ec -eq 0 ]; then echo "status=success" >> $GITHUB_OUTPUT; else echo "status=failed" >> $GITHUB_OUTPUT; fi
         exit $ec
