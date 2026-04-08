@@ -44,10 +44,17 @@ jobs:
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # Configure temporary git auth for private repo fetch
+          git config --local http.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
           git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
           echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
+          # Remove credentials so they are not available when PR code is checked out later
+          git config --local --unset http.https://github.com/.extraheader
 
       - name: Setup exclude config
         id: config
