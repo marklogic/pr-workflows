@@ -86,26 +86,11 @@ jobs:
           cat .trufflehog-ignore
           echo "exclude_args=--exclude-paths=.trufflehog-ignore" >> $GITHUB_OUTPUT
 
-      - name: TruffleHog Scan
-        id: trufflehog
-        # Pinned to v3.94.2 commit SHA to prevent supply chain attacks via mutable tag
-        uses: trufflesecurity/trufflehog@6bd2d14f7a4bc1e569fa3550efa7ec632a4fa67b # v3.94.2
-        # continue-on-error: true is intentional — without it, the job stops here if the
-        # action finds secrets in git history, and the Parse step (which creates the
-        # per-file annotations developers see) never runs.
-        continue-on-error: true
-        with:
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --json ${{ steps.config.outputs.exclude_args }}
-
-      - name: Parse scan results
+      - name: Scan changed files for secrets
         id: parse
         if: github.event_name != 'workflow_dispatch'
         run: |
-          # Scan the current state of PR files (not git history)
-          # This ensures renamed files and removed secrets are handled correctly
-          echo "Parsing TruffleHog results..."
+          echo "Scanning PR changed files for secrets..."
           
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
@@ -128,8 +113,7 @@ jobs:
           echo "Scanning changed files:"
           echo "$CHANGED_FILES"
           
-          # Scan only the changed files in their current state using filesystem scanner
-          # Pinned to v3.94.2 to match the action version above
+          # Scan changed files using TruffleHog filesystem mode — pinned tag for reproducibility
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:3.94.2 \
             filesystem /tmp/ \
