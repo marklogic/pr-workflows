@@ -124,12 +124,22 @@ jobs:
           echo "$CHANGED_FILES"
           
           # Scan changed files using TruffleHog filesystem mode — pinned by digest for reproducibility
+          SCAN_EXIT=0
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:3.94.2@sha256:dabd9a5f78ed81211792afc39a35100e2b947baa9f43f1e73a97759d7d15ab86 \
             filesystem /tmp/ \
             --json \
             $EXCLUDE_ARGS \
-            --no-update 2>/dev/null || true)
+            --no-update 2>/dev/null) || SCAN_EXIT=$?
+
+          # TruffleHog exits 0 (no secrets found) or 183 (secrets found) on a successful run.
+          # Any other exit code means Docker or TruffleHog itself failed to execute.
+          # We must not silently pass in that case — an empty SCAN_OUTPUT would report 0 findings
+          # and let the job succeed, bypassing the required ruleset check (fail-open).
+          if [ "$SCAN_EXIT" -ne 0 ] && [ "$SCAN_EXIT" -ne 183 ]; then
+            echo "::error::TruffleHog Docker scan failed (exit ${SCAN_EXIT}). Blocking to prevent fail-open bypass of secret scanning."
+            exit 1
+          fi
           
           # Parse JSON lines and filter to only changed files
           if [ -n "$SCAN_OUTPUT" ]; then
