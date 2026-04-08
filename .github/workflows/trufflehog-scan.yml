@@ -14,10 +14,14 @@ on:
 
 permissions:
   contents: read
-  # pull-requests: write is needed for the PR comment step (workflow_call path only).
-  # pull_request_target (org ruleset) skips that step, but GitHub Actions has no
-  # per-event conditional permissions within a single job.
+  # pull-requests: write and issues: write are needed for the PR comment step
+  # (workflow_call path only). The PR comment step uses github.rest.issues.*
+  # APIs which require issues: write; pull-requests: write is also kept for
+  # potential future comment resolution. pull_request_target skips the comment
+  # step, but GitHub Actions has no per-event conditional permissions within a
+  # single job — splitting into two jobs would add significant complexity.
   pull-requests: write
+  issues: write
 
 # Default exclusion patterns (regex format)
 # Supports: exact filenames, wildcards, regex patterns
