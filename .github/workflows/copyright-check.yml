@@ -2,7 +2,8 @@ name: Copyright Validation
 
 on:
   # Direct trigger for org-level repository rulesets — works for PRs from forks
-  # since pull_request_target runs with base repo context and write token.
+  # since pull_request_target runs with base repo context. The GITHUB_TOKEN is
+  # explicitly scoped to least privilege in the job permissions block below.
   # Fork code is only read as text by the trusted copyrightcheck.py script;
   # no fork code is executed. Worst case from a malicious .copyrightconfig
   # is the check passes (policy bypass), not code execution.
@@ -80,13 +81,13 @@ jobs:
       if: steps.changed-files.outputs.skip-validation != 'true'
       continue-on-error: true
       env:
-          COPYRIGHT_CHECK_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           CONFIG_FILE: ${{ steps.setup-config.outputs.config-file }}
       run: |
         script="pr-workflows/scripts/copyrightcheck.py"
         cfg="$CONFIG_FILE"
         [ -f "$script" ] || { echo "script missing"; exit 1; }
         chmod +x "$script"
+        export COPYRIGHT_CHECK_COMMIT_SHA=$(git -C target-repo rev-parse HEAD)
         python3 "$script" --config "$cfg" --working-dir target-repo \
           --files-from-stdin < files_to_check.txt > validation_output.txt 2>&1 \
           && echo "status=success" >> "$GITHUB_OUTPUT" \
