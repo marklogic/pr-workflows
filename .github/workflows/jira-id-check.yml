@@ -16,16 +16,6 @@ on:
         required: false
         type: string
         description: 'The PR title to check (for pull_request_target support)'
-      regex-pattern:
-        required: false
-        type: string
-        description: 'Custom regex pattern to match JIRA IDs (defaults to "[A-Z]+-[0-9]+")'
-        default: '[A-Z]+-[0-9]+'
-      fail-if-no-jira-id:
-        required: false
-        type: string
-        description: 'Whether to fail the check if no JIRA ID is found'
-        default: 'true'
       allow-wip:
         required: false
         type: string
@@ -51,8 +41,6 @@ jobs:
           EVENT_PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_REPO: ${{ github.repository }}
-          INPUT_REGEX_PATTERN: ${{ inputs.regex-pattern }}
-          INPUT_FAIL_IF_NO_JIRA_ID: ${{ inputs.fail-if-no-jira-id }}
           INPUT_ALLOW_WIP: ${{ inputs.allow-wip }}
           INPUT_CASE_SENSITIVE: ${{ inputs.case-sensitive }}
         run: |
@@ -84,17 +72,11 @@ jobs:
           fi
           echo "PR Title: $PR_TITLE"
 
-          # Set up inputs as environment variables
-          # JIRA project keys are defined at the organization level
           JIRA_PROJECT_KEYS="$ORGANIZATION_JIRA_PROJECT_KEYS"
-          REGEX_PATTERN="$INPUT_REGEX_PATTERN"
-          FAIL_IF_NO_JIRA_ID="$INPUT_FAIL_IF_NO_JIRA_ID"
           ALLOW_WIP="$INPUT_ALLOW_WIP"
           CASE_SENSITIVE="$INPUT_CASE_SENSITIVE"
 
           echo "Using organization-wide JIRA project keys: $JIRA_PROJECT_KEYS"
-          echo "Using regex pattern: $REGEX_PATTERN"
-          echo "Fail if no JIRA ID: $FAIL_IF_NO_JIRA_ID"
           echo "Allow WIP PRs: $ALLOW_WIP"
           echo "Case sensitive: $CASE_SENSITIVE"
 
