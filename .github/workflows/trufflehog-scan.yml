@@ -152,12 +152,12 @@ jobs:
                 excl_pattern="${excl_pattern#"${excl_pattern%%[! ]*}"}" # ltrim whitespace
                 [ -z "$excl_pattern" ] && continue
                 [ "${excl_pattern#\#}" != "$excl_pattern" ] && continue  # skip comment lines
-                echo "$FILE" | grep -qE -- "$excl_pattern" && EXCLUDED=true && break
+                grep -qE -- "$excl_pattern" <<< "$FILE" && EXCLUDED=true && break
               done < .trufflehog-ignore
               [ "$EXCLUDED" = "true" ] && continue
               
               # Only process files changed in this PR
-              if ! echo "$CHANGED_FILES" | grep -qxF -- "$FILE"; then
+              if ! grep -qxF -- "$FILE" <<< "$CHANGED_FILES"; then
                 continue
               fi
               
