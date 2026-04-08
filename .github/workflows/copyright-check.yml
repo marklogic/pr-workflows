@@ -19,8 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
       pull-requests: read
+      # issues: write is needed for the PR comment step (workflow_call path only).
+      # pull_request_target skips that step, but GitHub Actions has no per-event
+      # conditional permissions within a single job — splitting into two jobs would
+      # require artifact sharing and add significant complexity for minimal gain.
+      issues: write
 
     steps:
     - name: Checkout PR head
