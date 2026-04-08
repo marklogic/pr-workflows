@@ -1,6 +1,15 @@
 name: Copyright Validation
 
 on:
+  # Direct trigger for org-level repository rulesets — works for PRs from forks
+  # since pull_request_target runs with base repo context and write token.
+  # Fork code is only read as text by the trusted copyrightcheck.py script;
+  # no fork code is executed. Worst case from a malicious .copyrightconfig
+  # is the check passes (policy bypass), not code execution.
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+  # Also support being called as a reusable workflow from individual repos
   workflow_call:
 
 jobs:
