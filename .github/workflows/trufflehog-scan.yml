@@ -113,9 +113,9 @@ jobs:
           echo "Scanning changed files:"
           echo "$CHANGED_FILES"
           
-          # Scan changed files using TruffleHog filesystem mode — pinned tag for reproducibility
+          # Scan changed files using TruffleHog filesystem mode — pinned by digest for reproducibility
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
-            ghcr.io/trufflesecurity/trufflehog:3.94.2 \
+            ghcr.io/trufflesecurity/trufflehog:3.94.2@sha256:dabd9a5f78ed81211792afc39a35100e2b947baa9f43f1e73a97759d7d15ab86 \
             filesystem /tmp/ \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
@@ -141,12 +141,13 @@ jobs:
               while IFS= read -r excl_pattern; do
                 excl_pattern="${excl_pattern#"${excl_pattern%%[! ]*}"}" # ltrim whitespace
                 [ -z "$excl_pattern" ] && continue
-                echo "$FILE" | grep -qE "$excl_pattern" && EXCLUDED=true && break
+                [ "${excl_pattern#\#}" != "$excl_pattern" ] && continue  # skip comment lines
+                echo "$FILE" | grep -qE -- "$excl_pattern" && EXCLUDED=true && break
               done < .trufflehog-ignore
               [ "$EXCLUDED" = "true" ] && continue
               
               # Only process files changed in this PR
-              if ! echo "$CHANGED_FILES" | grep -qxF "$FILE"; then
+              if ! echo "$CHANGED_FILES" | grep -qxF -- "$FILE"; then
                 continue
               fi
               
