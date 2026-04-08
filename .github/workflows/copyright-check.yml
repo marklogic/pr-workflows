@@ -30,11 +30,15 @@ jobs:
 
     - name: Setup config
       id: setup-config
+      env:
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
       run: |
         cfg="target-repo/.copyrightconfig"
         if [ ! -f "$cfg" ]; then
-          git clone --depth 1 --branch ${{ github.event.pull_request.base.ref }} \
-            https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git base-repo
+          git clone --depth 1 --branch "$BASE_REF" \
+            https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git base-repo
           [ -f base-repo/.copyrightconfig ] && cfg="base-repo/.copyrightconfig"
         fi
         [ -f "$cfg" ] || { echo "missing config"; exit 1; }
@@ -49,12 +53,14 @@ jobs:
 
     - name: Get changed files
       id: changed-files
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
       run: |
         cd target-repo
-        base_sha="${{ github.event.pull_request.base.sha }}"
-        head_sha="${{ github.event.pull_request.head.sha }}"
-        git fetch origin ${{ github.event.pull_request.base.ref }}
-        git diff --name-only --diff-filter=AMR "$base_sha" "$head_sha" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
+        git fetch origin "$BASE_REF"
+        git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
         count=$(wc -l < ../files_to_check.txt | tr -d ' ')
         if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
         echo "files-count=$count" >> $GITHUB_OUTPUT
@@ -65,9 +71,10 @@ jobs:
       continue-on-error: true
       env:
           COPYRIGHT_CHECK_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          CONFIG_FILE: ${{ steps.setup-config.outputs.config-file }}
       run: |
         script="pr-workflows/scripts/copyrightcheck.py"
-        cfg="${{ steps.setup-config.outputs.config-file }}"
+        cfg="$CONFIG_FILE"
         [ -f "$script" ] || { echo "script missing"; exit 1; }
         chmod +x "$script"
         files=$(tr '\n' ' ' < files_to_check.txt)
@@ -125,8 +132,9 @@ jobs:
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
       env:
         COMMENT_ACTION: ${{ steps.pr-comment.outputs.comment_action }}
+        VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
       run: |
-        if [ "${{ steps.validate.outputs.status }}" != "success" ]; then
+        if [ "$VALIDATION_STATUS" != "success" ]; then
           if [ "$COMMENT_ACTION" = "updated" ] || [ "$COMMENT_ACTION" = "created" ]; then
             echo "::error title=Copyright Validation Failed::See the $COMMENT_ACTION PR comment for detailed results.";
           else
