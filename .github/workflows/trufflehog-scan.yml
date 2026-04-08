@@ -1,12 +1,22 @@
 name: TruffleHog Secret Scan
 
 on:
+  # Direct trigger for org-level repository rulesets — works for PRs from forks
+  # since pull_request_target runs with base repo context. The GITHUB_TOKEN is
+  # explicitly scoped to least privilege in the job permissions block below.
   pull_request_target:
     types: [opened, synchronize, reopened]
+
+  # Also support being called as a reusable workflow from individual repos
+  workflow_call:
+
   workflow_dispatch:
 
 permissions:
   contents: read
+  # pull-requests: write is needed for the PR comment step (workflow_call path only).
+  # pull_request_target (org ruleset) skips that step, but GitHub Actions has no
+  # per-event conditional permissions within a single job.
   pull-requests: write
 
 # Default exclusion patterns (regex format)
@@ -44,9 +54,14 @@ jobs:
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
-          git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
+          # Scope credentials to this repo only — git -c passes the header in-memory
+          # and is never written to .git/config, so persist-credentials: false is preserved.
+          AUTH_HEADER="Authorization: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c "http.${{ github.server_url }}/${{ github.repository }}/.extraheader=${AUTH_HEADER}" \
+            fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
           echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
 
       - name: Setup exclude config
@@ -75,6 +90,9 @@ jobs:
         id: trufflehog
         # Pinned to v3.94.2 commit SHA to prevent supply chain attacks via mutable tag
         uses: trufflesecurity/trufflehog@6bd2d14f7a4bc1e569fa3550efa7ec632a4fa67b # v3.94.2
+        # continue-on-error: true is intentional — without it, the job stops here if the
+        # action finds secrets in git history, and the Parse step (which creates the
+        # per-file annotations developers see) never runs.
         continue-on-error: true
         with:
           base: ${{ github.event.pull_request.base.sha }}
@@ -132,7 +150,7 @@ jobs:
               FILE="${FILE#/tmp/}"
               
               # Only count secrets in files that are part of this PR
-              if ! echo "$CHANGED_FILES" | grep -qx "$FILE"; then
+              if ! echo "$CHANGED_FILES" | grep -qxF "$FILE"; then
                 continue
               fi
               
@@ -184,7 +202,10 @@ jobs:
           fi
 
       - name: Post PR comment on findings
-        if: github.event_name != 'workflow_dispatch'
+        # workflow_call: token is scoped to the calling repo — write access works.
+        # pull_request_target (org ruleset): token is read-only for the triggering repo —
+        # createComment/updateComment will 403. Skip and rely on job annotations instead.
+        if: github.event_name == 'workflow_call'
         uses: actions/github-script@v7
         with:
           script: |
@@ -195,7 +216,7 @@ jobs:
             const hasVerified = '${{ steps.process.outputs.has_verified }}' === 'true';
             const verifiedCount = '${{ steps.parse.outputs.verified_count }}' || '0';
             const unverifiedCount = '${{ steps.parse.outputs.unverified_count }}' || '0';
-            
+            try {
             // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -298,6 +319,10 @@ jobs:
                 issue_number: context.payload.pull_request.number,
                 body: body
               });
+            }
+            } catch(e) {
+              core.error(`Failed to post PR comment: ${e.status || ''} ${e.message}`);
+              if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
             }
 
       - name: Fail workflow if verified secrets found
