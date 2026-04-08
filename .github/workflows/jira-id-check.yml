@@ -40,68 +40,77 @@ on:
 jobs:
   check-jira-id:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     steps:
       - name: 🏷️ Validate JIRA ticket ID in PR title
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_PR_TITLE: ${{ inputs.pr-title }}
+          EVENT_PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_REGEX_PATTERN: ${{ inputs.regex-pattern }}
+          INPUT_FAIL_IF_NO_JIRA_ID: ${{ inputs.fail-if-no-jira-id }}
+          INPUT_ALLOW_WIP: ${{ inputs.allow-wip }}
+          INPUT_CASE_SENSITIVE: ${{ inputs.case-sensitive }}
         run: |
           # Get PR title from context or input parameter (for pull_request_target support)
-          if [[ -n "${{ inputs.pr-title }}" ]]; then
-            PR_TITLE="${{ inputs.pr-title }}"
+          if [[ -n "$INPUT_PR_TITLE" ]]; then
+            PR_TITLE="$INPUT_PR_TITLE"
             echo "Using PR title from input parameter"
           else
-            PR_TITLE="${{ github.event.pull_request.title }}"
+            PR_TITLE="$EVENT_PR_TITLE"
             echo "Using PR title from GitHub event context"
           fi
-          
+
           # Fetch the current PR title from the API to handle re-runs correctly.
           # When a workflow is re-run (either directly or via a reusable workflow caller),
           # the event payload contains the title from the original trigger, not the current
           # state. If the user edited the title (e.g., to add a JIRA ID), we need to detect
           # that and use the updated title instead.
-          PR_NUMBER="${{ github.event.pull_request.number }}"
           if [[ -n "$PR_NUMBER" ]]; then
             LIVE_TITLE=$(gh pr view "$PR_NUMBER" \
-              --repo "${{ github.repository }}" \
+              --repo "$GH_REPO" \
               --json title --jq '.title' 2>/dev/null || true)
-            
+
             if [[ -n "$LIVE_TITLE" && "$LIVE_TITLE" != "$PR_TITLE" ]]; then
-              echo "⚠️  PR title was updated since workflow was triggered"
-              echo "   Event title: $PR_TITLE"
-              echo "   Current title: $LIVE_TITLE"
+              echo "PR title was updated since workflow was triggered"
+              echo "  Event title: $PR_TITLE"
+              echo "  Current title: $LIVE_TITLE"
               PR_TITLE="$LIVE_TITLE"
             fi
           fi
           echo "PR Title: $PR_TITLE"
-          
+
           # Set up inputs as environment variables
           # JIRA project keys are defined at the organization level
-          JIRA_PROJECT_KEYS="${{ env.ORGANIZATION_JIRA_PROJECT_KEYS }}"
-          REGEX_PATTERN="${{ inputs.regex-pattern }}"
-          FAIL_IF_NO_JIRA_ID="${{ inputs.fail-if-no-jira-id }}"
-          ALLOW_WIP="${{ inputs.allow-wip }}"
-          CASE_SENSITIVE="${{ inputs.case-sensitive }}"
-          
+          JIRA_PROJECT_KEYS="$ORGANIZATION_JIRA_PROJECT_KEYS"
+          REGEX_PATTERN="$INPUT_REGEX_PATTERN"
+          FAIL_IF_NO_JIRA_ID="$INPUT_FAIL_IF_NO_JIRA_ID"
+          ALLOW_WIP="$INPUT_ALLOW_WIP"
+          CASE_SENSITIVE="$INPUT_CASE_SENSITIVE"
+
           echo "Using organization-wide JIRA project keys: $JIRA_PROJECT_KEYS"
           echo "Using regex pattern: $REGEX_PATTERN"
           echo "Fail if no JIRA ID: $FAIL_IF_NO_JIRA_ID"
           echo "Allow WIP PRs: $ALLOW_WIP"
           echo "Case sensitive: $CASE_SENSITIVE"
-          
+
           # Handle WIP PRs
           if [[ "$ALLOW_WIP" == "true" && "${PR_TITLE,,}" =~ ^wip: ]]; then
             echo "This is a WIP PR. Skipping JIRA ID check."
             exit 0
           fi
-          
+
           # Convert comma-separated project keys to array
           IFS=',' read -ra PROJECT_KEYS <<< "$JIRA_PROJECT_KEYS"
           echo "Valid project keys: ${PROJECT_KEYS[*]}"
-          
+
           # Directly check for valid JIRA IDs in the PR title
           VALID_ID_FOUND=false
-          
+
           for VALID_KEY in "${PROJECT_KEYS[@]}"; do
             # Create a pattern specifically for this project key
             if [[ "$CASE_SENSITIVE" == "true" ]]; then
@@ -122,7 +131,7 @@ jobs:
               fi
             fi
           done
-          
+
           if [[ "$VALID_ID_FOUND" != "true" ]]; then
             echo "ERROR: No JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
             echo "::error::No JIRA ID found in PR title: \"$PR_TITLE\". Valid project keys are: $JIRA_PROJECT_KEYS"
