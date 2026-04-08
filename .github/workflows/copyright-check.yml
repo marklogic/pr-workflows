@@ -88,10 +88,9 @@ jobs:
         [ -f "$script" ] || { echo "script missing"; exit 1; }
         chmod +x "$script"
         python3 "$script" --config "$cfg" --working-dir target-repo \
-          --files-from-stdin < files_to_check.txt > validation_output.txt 2>&1
-        ec=$?
-        if [ $ec -eq 0 ]; then echo "status=success" >> $GITHUB_OUTPUT; else echo "status=failed" >> $GITHUB_OUTPUT; fi
-        exit $ec
+          --files-from-stdin < files_to_check.txt > validation_output.txt 2>&1 \
+          && echo "status=success" >> "$GITHUB_OUTPUT" \
+          || { echo "status=failed" >> "$GITHUB_OUTPUT"; exit 1; }
 
     - name: Extract Markdown summary
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
@@ -104,7 +103,10 @@ jobs:
 
     - name: Post / Update PR comment with summary
       id: pr-comment
-      if: always() && steps.changed-files.outputs.skip-validation != 'true'
+      # workflow_call: token is scoped to the calling repo — write access works.
+      # pull_request_target (org ruleset): token is read-only for the triggering repo —
+      # createComment/updateComment will 403. Skip and rely on Job Summary instead.
+      if: always() && steps.changed-files.outputs.skip-validation != 'true' && github.event_name == 'workflow_call'
       uses: actions/github-script@v7
       env:
         VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
@@ -148,7 +150,7 @@ jobs:
           if [ "$COMMENT_ACTION" = "updated" ] || [ "$COMMENT_ACTION" = "created" ]; then
             echo "::error title=Copyright Validation Failed::See the $COMMENT_ACTION PR comment for detailed results.";
           else
-            echo "::error title=Copyright Validation Failed::See the PR comment (unavailable or failed to post).";
+            echo "::error title=Copyright Validation Failed::Copyright headers are missing or invalid — see the Job Summary for details.";
           fi
           exit 1
         fi
