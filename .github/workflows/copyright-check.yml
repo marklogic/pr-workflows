@@ -63,14 +63,15 @@ jobs:
     - name: Get changed files
       id: changed-files
       env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
       run: |
-        cd target-repo
-        git fetch origin "$BASE_REF"
-        git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
-        count=$(wc -l < ../files_to_check.txt | tr -d ' ')
+        gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --paginate \
+          --jq '.[].filename' | while IFS= read -r f; do
+          [ -f "target-repo/$f" ] && echo "$f"
+        done > files_to_check.txt
+        count=$(wc -l < files_to_check.txt | tr -d ' ')
         if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
         echo "files-count=$count" >> $GITHUB_OUTPUT
 
