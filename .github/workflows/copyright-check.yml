@@ -18,6 +18,7 @@ jobs:
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         path: target-repo
+        persist-credentials: false
 
     - name: Checkout pr-workflows repo
       uses: actions/checkout@v4
@@ -25,6 +26,7 @@ jobs:
         repository: ${{ github.repository_owner }}/pr-workflows
         ref: main
         path: pr-workflows
+        persist-credentials: false
 
     - name: Setup config
       id: setup-config
