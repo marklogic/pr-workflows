@@ -69,7 +69,7 @@ jobs:
       run: |
         gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --paginate \
           --jq '.[].filename' | while IFS= read -r f; do
-          [ -f "target-repo/$f" ] && echo "$f"
+          if [ -f "target-repo/$f" ]; then echo "$f"; fi
         done > files_to_check.txt
         count=$(wc -l < files_to_check.txt | tr -d ' ')
         if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
