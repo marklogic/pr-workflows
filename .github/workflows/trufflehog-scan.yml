@@ -130,10 +130,22 @@ jobs:
               fi
               
               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // "unknown"')
-              # Remove /tmp/ prefix if present
+              # Remove /tmp/ prefix (Docker mounts the repo at /tmp/)
               FILE="${FILE#/tmp/}"
               
-              # Only count secrets in files that are part of this PR
+              # Re-apply exclusion patterns against the relative path.
+              # Docker sees absolute paths (/tmp/vendor/config.js), so TruffleHog's
+              # --exclude-paths misses patterns anchored with ^ (e.g. ^vendor/).
+              # We check here after stripping the /tmp/ prefix to enforce them correctly.
+              EXCLUDED=false
+              while IFS= read -r excl_pattern; do
+                excl_pattern="${excl_pattern#"${excl_pattern%%[! ]*}"}" # ltrim whitespace
+                [ -z "$excl_pattern" ] && continue
+                echo "$FILE" | grep -qE "$excl_pattern" && EXCLUDED=true && break
+              done < .trufflehog-ignore
+              [ "$EXCLUDED" = "true" ] && continue
+              
+              # Only process files changed in this PR
               if ! echo "$CHANGED_FILES" | grep -qxF "$FILE"; then
                 continue
               fi
