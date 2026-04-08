@@ -70,7 +70,8 @@ jobs:
 
       - name: TruffleHog Scan
         id: trufflehog
-        uses: trufflesecurity/trufflehog@main
+        # Pinned to v3.94.2 commit SHA to prevent supply chain attacks via mutable tag
+        uses: trufflesecurity/trufflehog@6bd2d14f7a4bc1e569fa3550efa7ec632a4fa67b # v3.94.2
         continue-on-error: true
         with:
           base: ${{ github.event.pull_request.base.sha }}
@@ -107,8 +108,9 @@ jobs:
           echo "$CHANGED_FILES"
           
           # Scan only the changed files in their current state using filesystem scanner
+          # Pinned to v3.94.2 to match the action version above
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
-            ghcr.io/trufflesecurity/trufflehog:latest \
+            ghcr.io/trufflesecurity/trufflehog:3.94.2 \
             filesystem /tmp/ \
             --json \
             ${{ steps.config.outputs.exclude_args }} \
@@ -266,7 +268,7 @@ jobs:
 
             ### Understanding Results
             | Type | Meaning | Action Required |
-            |------|---------|-----------------|
+            |------|---------|--------------------|
             | **Verified** | Confirmed active credential | **Must remove & rotate** - PR blocked |
             | **Unverified** | Potential secret pattern | Review recommended - PR can proceed |
 
