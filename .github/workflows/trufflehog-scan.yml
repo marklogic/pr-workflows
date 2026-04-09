@@ -1,13 +1,27 @@
 name: TruffleHog Secret Scan
 
 on:
+  # Direct trigger for org-level repository rulesets — works for PRs from forks
+  # since pull_request_target runs with base repo context. The GITHUB_TOKEN is
+  # explicitly scoped to least privilege in the job permissions block below.
   pull_request_target:
     types: [opened, synchronize, reopened]
+
+  # Also support being called as a reusable workflow from individual repos
+  workflow_call:
+
   workflow_dispatch:
 
 permissions:
   contents: read
+  # pull-requests: write and issues: write are needed for the PR comment step
+  # (workflow_call path only). The PR comment step uses github.rest.issues.*
+  # APIs which require issues: write; pull-requests: write is also kept for
+  # potential future comment resolution. pull_request_target skips the comment
+  # step, but GitHub Actions has no per-event conditional permissions within a
+  # single job — splitting into two jobs would add significant complexity.
   pull-requests: write
+  issues: write
 
 # Default exclusion patterns (regex format)
 # Supports: exact filenames, wildcards, regex patterns
@@ -37,17 +51,26 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Fetch PR head commits
         if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Fetch PR commits using GitHub's merge ref (works for all PRs including forks)
-          git fetch origin +refs/pull/${{ github.event.pull_request.number }}/head:refs/remotes/origin/pr-head
-          echo "Fetched PR #${{ github.event.pull_request.number }} head commit: ${{ github.event.pull_request.head.sha }}"
+          # Scope credentials to this repo only — git -c passes the header in-memory
+          # and is never written to .git/config, so persist-credentials: false is preserved.
+          AUTH_HEADER="Authorization: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c "http.${SERVER_URL}/${REPO}/.extraheader=${AUTH_HEADER}" \
+            fetch origin +refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head
+          echo "Fetched PR #${PR_NUMBER} head commit: ${PR_HEAD_SHA}"
 
       - name: Setup exclude config
         id: config
@@ -56,9 +79,7 @@ jobs:
         run: |
           # Always include default exclusions
           echo "Adding default exclusions"
-          cat << 'EOF' > .trufflehog-ignore
-          ${{ env.DEFAULT_EXCLUDES }}
-          EOF
+          printf '%s\n' "$DEFAULT_EXCLUDES" > .trufflehog-ignore
           
           # Append repo/org-level custom exclusions if defined
           if [ -n "$TRUFFLEHOG_EXCLUDES" ]; then
@@ -71,34 +92,26 @@ jobs:
           cat .trufflehog-ignore
           echo "exclude_args=--exclude-paths=.trufflehog-ignore" >> $GITHUB_OUTPUT
 
-      - name: TruffleHog Scan
-        id: trufflehog
-        # Pinned to v3.94.2 commit SHA to prevent supply chain attacks via mutable tag
-        uses: trufflesecurity/trufflehog@6bd2d14f7a4bc1e569fa3550efa7ec632a4fa67b # v3.94.2
-        continue-on-error: true
-        with:
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --json ${{ steps.config.outputs.exclude_args }}
-
-      - name: Parse scan results
+      - name: Scan changed files for secrets
         id: parse
         if: github.event_name != 'workflow_dispatch'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXCLUDE_ARGS: ${{ steps.config.outputs.exclude_args }}
         run: |
-          # Scan the current state of PR files (not git history)
-          # This ensures renamed files and removed secrets are handled correctly
-          echo "Parsing TruffleHog results..."
+          echo "Scanning PR changed files for secrets..."
           
           VERIFIED_COUNT=0
           UNVERIFIED_COUNT=0
           
           # Checkout PR head to scan current file state
-          git checkout ${{ github.event.pull_request.head.sha }} --quiet
+          git checkout "${PR_HEAD_SHA}" --quiet
           
           # Get list of files changed in this PR (with rename detection)
           # -M enables rename detection, showing only the new filename for renamed files
           # --diff-filter=d excludes deleted files (we only want files that exist in the PR head)
-          CHANGED_FILES=$(git diff --name-only -M --diff-filter=d ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} | grep -v '^$' || true)
+          CHANGED_FILES=$(git diff --name-only -M --diff-filter=d "${PR_BASE_SHA}...${PR_HEAD_SHA}" | grep -v '^$' || true)
           
           if [ -z "$CHANGED_FILES" ]; then
             echo "No files changed in PR"
@@ -110,14 +123,23 @@ jobs:
           echo "Scanning changed files:"
           echo "$CHANGED_FILES"
           
-          # Scan only the changed files in their current state using filesystem scanner
-          # Pinned to v3.94.2 to match the action version above
+          # Scan changed files using TruffleHog filesystem mode — pinned by digest for reproducibility
+          SCAN_EXIT=0
           SCAN_OUTPUT=$(docker run --rm -v "$(pwd)":/tmp -w /tmp \
-            ghcr.io/trufflesecurity/trufflehog:3.94.2 \
+            ghcr.io/trufflesecurity/trufflehog:3.94.2@sha256:dabd9a5f78ed81211792afc39a35100e2b947baa9f43f1e73a97759d7d15ab86 \
             filesystem /tmp/ \
             --json \
-            ${{ steps.config.outputs.exclude_args }} \
-            --no-update 2>/dev/null || true)
+            $EXCLUDE_ARGS \
+            --no-update 2>/dev/null) || SCAN_EXIT=$?
+
+          # TruffleHog exits 0 (no secrets found) or 183 (secrets found) on a successful run.
+          # Any other exit code means Docker or TruffleHog itself failed to execute.
+          # We must not silently pass in that case — an empty SCAN_OUTPUT would report 0 findings
+          # and let the job succeed, bypassing the required ruleset check (fail-open).
+          if [ "$SCAN_EXIT" -ne 0 ] && [ "$SCAN_EXIT" -ne 183 ]; then
+            echo "::error::TruffleHog Docker scan failed (exit ${SCAN_EXIT}). Blocking to prevent fail-open bypass of secret scanning."
+            exit 1
+          fi
           
           # Parse JSON lines and filter to only changed files
           if [ -n "$SCAN_OUTPUT" ]; then
@@ -128,11 +150,24 @@ jobs:
               fi
               
               FILE=$(echo "$line" | jq -r '.SourceMetadata.Data.Filesystem.file // "unknown"')
-              # Remove /tmp/ prefix if present
+              # Remove /tmp/ prefix (Docker mounts the repo at /tmp/)
               FILE="${FILE#/tmp/}"
               
-              # Only count secrets in files that are part of this PR
-              if ! echo "$CHANGED_FILES" | grep -qx "$FILE"; then
+              # Re-apply exclusion patterns against the relative path.
+              # Docker sees absolute paths (/tmp/vendor/config.js), so TruffleHog's
+              # --exclude-paths misses patterns anchored with ^ (e.g. ^vendor/).
+              # We check here after stripping the /tmp/ prefix to enforce them correctly.
+              EXCLUDED=false
+              while IFS= read -r excl_pattern; do
+                excl_pattern="${excl_pattern#"${excl_pattern%%[! ]*}"}" # ltrim whitespace
+                [ -z "$excl_pattern" ] && continue
+                [ "${excl_pattern#\#}" != "$excl_pattern" ] && continue  # skip comment lines
+                grep -qE -- "$excl_pattern" <<< "$FILE" && EXCLUDED=true && break
+              done < .trufflehog-ignore
+              [ "$EXCLUDED" = "true" ] && continue
+              
+              # Only process files changed in this PR
+              if ! grep -qxF -- "$FILE" <<< "$CHANGED_FILES"; then
                 continue
               fi
               
@@ -184,18 +219,33 @@ jobs:
           fi
 
       - name: Post PR comment on findings
-        if: github.event_name != 'workflow_dispatch'
-        uses: actions/github-script@v7
+        # workflow_call: token is scoped to the calling repo — write access works.
+        # pull_request_target (org ruleset): token is read-only for the triggering repo —
+        # createComment/updateComment will 403. Skip and rely on job annotations instead.
+        if: github.event_name == 'workflow_call'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_SECRETS: ${{ steps.process.outputs.has_secrets }}
+          HAS_VERIFIED: ${{ steps.process.outputs.has_verified }}
+          VERIFIED_COUNT: ${{ steps.parse.outputs.verified_count }}
+          UNVERIFIED_COUNT: ${{ steps.parse.outputs.unverified_count }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const commentMarker = '<!-- TRUFFLEHOG-SCAN-COMMENT -->';
-            const commitSha = '${{ github.event.pull_request.head.sha }}';
+            const commitSha = process.env.PR_HEAD_SHA;
             const shortSha = commitSha.substring(0, 7);
-            const hasSecrets = '${{ steps.process.outputs.has_secrets }}' === 'true';
-            const hasVerified = '${{ steps.process.outputs.has_verified }}' === 'true';
-            const verifiedCount = '${{ steps.parse.outputs.verified_count }}' || '0';
-            const unverifiedCount = '${{ steps.parse.outputs.unverified_count }}' || '0';
-            
+            const hasSecrets = process.env.HAS_SECRETS === 'true';
+            const hasVerified = process.env.HAS_VERIFIED === 'true';
+            const verifiedCount = process.env.VERIFIED_COUNT || '0';
+            const unverifiedCount = process.env.UNVERIFIED_COUNT || '0';
+            const serverUrl = process.env.SERVER_URL;
+            const repo = process.env.REPO;
+            const runId = process.env.RUN_ID;
+            try {
             // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -224,7 +274,7 @@ jobs:
 
             **No secrets detected in this pull request.**
 
-            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
+            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${serverUrl}/${repo}/commit/${commitSha}))
 
             Previous ${previousType} have been resolved. Thank you for addressing the security concerns!
 
@@ -262,7 +312,7 @@ jobs:
             - **Verified (active) secrets:** ${verifiedCount} ${verifiedCount > 0 ? ':x:' : ':white_check_mark:'}
             - **Unverified (potential) secrets:** ${unverifiedCount} ${unverifiedCount > 0 ? ':warning:' : ':white_check_mark:'}
 
-            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${{ github.server_url }}/${{ github.repository }}/commit/${commitSha}))
+            **Scanned commit:** \`${shortSha}\` ([${commitSha}](${serverUrl}/${repo}/commit/${commitSha}))
 
             ${action}
 
@@ -278,7 +328,7 @@ jobs:
             | **Verified** | Confirmed active credential | **Must remove & rotate** - PR blocked |
             | **Unverified** | Potential secret pattern | Review recommended - PR can proceed |
 
-            Check the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+            Check the [workflow run logs](${serverUrl}/${repo}/actions/runs/${runId}) for details.
 
             ---
             *Verified secrets are confirmed active by TruffleHog. Unverified secrets match known patterns but couldn't be validated.*
@@ -298,6 +348,10 @@ jobs:
                 issue_number: context.payload.pull_request.number,
                 body: body
               });
+            }
+            } catch(e) {
+              core.error(`Failed to post PR comment: ${e.status || ''} ${e.message}`);
+              if (e.response) core.error(`Response: ${JSON.stringify(e.response.data).slice(0,400)}`);
             }
 
       - name: Fail workflow if verified secrets found
