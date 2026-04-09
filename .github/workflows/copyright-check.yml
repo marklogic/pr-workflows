@@ -1,6 +1,16 @@
 name: Copyright Validation
 
 on:
+  # Direct trigger for org-level repository rulesets — works for PRs from forks
+  # since pull_request_target runs with base repo context. The GITHUB_TOKEN is
+  # explicitly scoped to least privilege in the job permissions block below.
+  # Fork code is only read as text by the trusted copyrightcheck.py script;
+  # no fork code is executed. Worst case from a malicious .copyrightconfig
+  # is the check passes (policy bypass), not code execution.
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+  # Also support being called as a reusable workflow from individual repos
   workflow_call:
 
 jobs:
@@ -9,19 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
+      # issues: write is needed for the PR comment step (workflow_call path only).
+      # pull_request_target skips that step, but GitHub Actions has no per-event
+      # conditional permissions within a single job — splitting into two jobs would
+      # require artifact sharing and add significant complexity for minimal gain.
       issues: write
 
     steps:
     - name: Checkout PR head
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
-        ref: ${{ github.event.pull_request.head.sha }}
+        ref: refs/pull/${{ github.event.pull_request.number }}/head
         path: target-repo
         persist-credentials: false
 
     - name: Checkout pr-workflows repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         repository: ${{ github.repository_owner }}/pr-workflows
         ref: main
@@ -47,21 +61,22 @@ jobs:
         echo "config-file=$cfg" >> $GITHUB_OUTPUT
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
       with:
         python-version: '3.11'
 
     - name: Get changed files
       id: changed-files
       env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
       run: |
-        cd target-repo
-        git fetch origin "$BASE_REF"
-        git diff --name-only --diff-filter=AMR "$BASE_SHA" "$HEAD_SHA" | while read f; do [ -f "$f" ] && echo "$f"; done > ../files_to_check.txt
-        count=$(wc -l < ../files_to_check.txt | tr -d ' ')
+        gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" --paginate \
+          --jq '.[].filename' | while IFS= read -r f; do
+          if [ -f "target-repo/$f" ]; then echo "$f"; fi
+        done > files_to_check.txt
+        count=$(wc -l < files_to_check.txt | tr -d ' ')
         if [ "$count" -eq 0 ]; then echo "skip-validation=true" >> $GITHUB_OUTPUT; else echo "skip-validation=false" >> $GITHUB_OUTPUT; fi
         echo "files-count=$count" >> $GITHUB_OUTPUT
 
@@ -70,18 +85,17 @@ jobs:
       if: steps.changed-files.outputs.skip-validation != 'true'
       continue-on-error: true
       env:
-          COPYRIGHT_CHECK_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           CONFIG_FILE: ${{ steps.setup-config.outputs.config-file }}
       run: |
         script="pr-workflows/scripts/copyrightcheck.py"
         cfg="$CONFIG_FILE"
         [ -f "$script" ] || { echo "script missing"; exit 1; }
         chmod +x "$script"
-        files=$(tr '\n' ' ' < files_to_check.txt)
-        python3 "$script" --config "$cfg" --working-dir target-repo $files > validation_output.txt 2>&1
-        ec=$?
-        if [ $ec -eq 0 ]; then echo "status=success" >> $GITHUB_OUTPUT; else echo "status=failed" >> $GITHUB_OUTPUT; fi
-        exit $ec
+        export COPYRIGHT_CHECK_COMMIT_SHA=$(git -C target-repo rev-parse HEAD)
+        python3 "$script" --config "$cfg" --working-dir target-repo \
+          --files-from-stdin < files_to_check.txt > validation_output.txt 2>&1 \
+          && echo "status=success" >> "$GITHUB_OUTPUT" \
+          || { echo "status=failed" >> "$GITHUB_OUTPUT"; exit 1; }
 
     - name: Extract Markdown summary
       if: always() && steps.changed-files.outputs.skip-validation != 'true'
@@ -94,8 +108,11 @@ jobs:
 
     - name: Post / Update PR comment with summary
       id: pr-comment
-      if: always() && steps.changed-files.outputs.skip-validation != 'true'
-      uses: actions/github-script@v7
+      # workflow_call: token is scoped to the calling repo — write access works.
+      # pull_request_target (org ruleset): token is read-only for the triggering repo —
+      # createComment/updateComment will 403. Skip and rely on Job Summary instead.
+      if: always() && steps.changed-files.outputs.skip-validation != 'true' && github.event_name == 'workflow_call'
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         VALIDATION_STATUS: ${{ steps.validate.outputs.status }}
       with:
@@ -138,7 +155,7 @@ jobs:
           if [ "$COMMENT_ACTION" = "updated" ] || [ "$COMMENT_ACTION" = "created" ]; then
             echo "::error title=Copyright Validation Failed::See the $COMMENT_ACTION PR comment for detailed results.";
           else
-            echo "::error title=Copyright Validation Failed::See the PR comment (unavailable or failed to post).";
+            echo "::error title=Copyright Validation Failed::Copyright headers are missing or invalid — see the Job Summary for details.";
           fi
           exit 1
         fi
